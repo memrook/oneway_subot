@@ -26,12 +26,11 @@ func main() {
 
 	file, _ := ioutil.ReadFile("settings.json")
 	settings := settings{}
-	_ = json.Unmarshal([]byte(file), &settings)
+	_ = json.Unmarshal(file, &settings)
 
 	// Note: Please keep in mind that default logger may expose sensitive information,
 	// use in development only
 	bot, err := telego.NewBot(botToken, telego.WithDefaultDebugLogger())
-
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -72,6 +71,12 @@ func main() {
 	// Stop getting updates
 	defer bot.StopLongPulling()
 
+	// Handler channel posts
+	bh.HandleChannelPost(func(bot *telego.Bot, message telego.Message) {
+		//TODO: make saving channel post to DB
+
+	}, th.AnyChannelPost())
+
 	//*** PRIVATE CHATS ***
 	//TODO: make forwarding private messages to channel discussion
 	//TODO: make welcome message and menu
@@ -107,29 +112,37 @@ func main() {
 	}, th.AnyCommand())
 
 	//Handle messages from user
-	bh.HandleMessage(func(bot *telego.Bot, message telego.Message) {
-		user, _ := mdb.GetUser(message.From.ID)
+	bh.Handle(func(bot *telego.Bot, update telego.Update) {
+		user, _ := mdb.GetUser(update.Message.From.ID)
 		switch {
 		case user == nil:
 			_, _ = bot.SendMessage(tu.Message(
-				tu.ID(message.Chat.ID), fmt.Sprintf(
+				tu.ID(update.Message.Chat.ID), fmt.Sprintf(
 					`Добро пожаловать в бот технической поддержки клиентов!
 Опишите вашу проблему <b>одним сообщением</b> и мы постараемся ее решить в кратчайшин строки!`),
 			).WithParseMode("HTML"))
-			if err := mdb.AddUser(message.From); err != nil {
+			if err := mdb.AddUser(update.Message.From); err != nil {
 				log.Println("error addUser: ", err)
 			}
 		case user != nil:
-			mdb.IsFirstMessage(user)
+			check := mdb.IsFirstMessage(update.Message.From.ID)
+			if check {
+				err := mdb.NewChat(user.UserID, &update.Message.Chat)
+				if err != nil {
+					log.Println("failed NewChat due ERR:", err)
+				}
+				//_, _ = bot.ForwardMessage(&telego.ForwardMessageParams{ChatID: tu.ID(settings.ChannelID), FromChatID: tu.ID(update.Message.Chat.ID), MessageID: update.Message.MessageID})
+				_, _ = bot.SendMessage(tu.Message(
+					tu.ID(settings.ChannelID), fmt.Sprintf(
+						"<b>Обращение #%d \nот @%s</b>\n\n<tg-spoiler>%s</tg-spoiler>\n", update.Message.Chat.ID, update.Message.From.Username, update.Message.Text),
+				).WithParseMode("HTML"))
+			}
 
 		}
-	}, th.Not(th.AnyCommand()))
-
-	// Handler channel posts
-	bh.HandleChannelPost(func(bot *telego.Bot, message telego.Message) {
-		//TODO: make saving channel post to DB
-
-	}, th.AnyChannelPost())
+	}, th.Not(th.AnyCommand()), th.AnyMessageWithText(),
+		func(update telego.Update) bool {
+			return update.Message.Chat.Type == "private"
+		})
 
 	// Handle supergroup message for a message forwarded form channel
 	bh.Handle(func(bot *telego.Bot, update telego.Update) {
@@ -139,7 +152,7 @@ func main() {
 			fmt.Sprintf(
 				"<b>Тикет #%d.</b>\nОбращение от %s.\n<code>Для ответа пользователю воспользуйтесь функцией 'Ответить ⤺' на любое сообщение бота</code>",
 				update.Message.ForwardFromMessageID, update.Message.From.FirstName),
-		).WithParseMode("HTML").WithReplyToMessageID(update.Message.MessageID))
+		).WithReplyToMessageID(update.Message.MessageID).WithParseMode("HTML").WithDisableNotification())
 	}, func(update telego.Update) bool {
 		return update.Message.From.ID == 777000 &&
 			update.Message.IsAutomaticForward &&

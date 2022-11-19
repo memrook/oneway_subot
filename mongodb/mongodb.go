@@ -14,20 +14,6 @@ import (
 var users, chats *mongo.Collection
 var ctx = context.TODO()
 
-// Chat mongo structure
-type Chat struct {
-	ID        primitive.ObjectID `bson:"_id"`
-	ChatID    int64              `bson:"chat_id"`
-	UserID    primitive.ObjectID `bson:"user_id"`
-	FirstName string             `bson:"first_name"`
-	LastName  string             `bson:"last_name"`
-	Username  string             `bson:"username"`
-	Type      string             `bson:"type"`
-	isActive  bool               `bson:"is_active"`
-	CreatedAt time.Time          `bson:"created_at"`
-	UpdatedAt time.Time          `bson:"updated_at"`
-}
-
 // User mongo structure with array of Chat
 type User struct {
 	ID            primitive.ObjectID   `bson:"_id"`
@@ -41,6 +27,20 @@ type User struct {
 	isActiveChats bool                 `bson:"is_active_chats"`
 	CreatedAt     time.Time            `bson:"created_at"`
 	UpdatedAt     time.Time            `bson:"updated_at"`
+}
+
+// Chat mongo structure
+type Chat struct {
+	ID        primitive.ObjectID `bson:"_id"`
+	ChatID    int64              `bson:"chat_id"`
+	UserID    int64              `bson:"user_id"`
+	FirstName string             `bson:"first_name"`
+	LastName  string             `bson:"last_name"`
+	Username  string             `bson:"username"`
+	Type      string             `bson:"type"`
+	isActive  bool               `bson:"is_active"`
+	CreatedAt time.Time          `bson:"created_at"`
+	UpdatedAt time.Time          `bson:"updated_at"`
 }
 
 func init() {
@@ -59,13 +59,20 @@ func init() {
 	chats = client.Database("onewaySuBot").Collection("chats")
 }
 
-func IsFirstMessage(user *User) bool {
-	//opts := options.Find()
-
-	return true
+func IsFirstMessage(id int64) bool {
+	var dbUser *User
+	filter := bson.D{{"user_id", id}}
+	opts := options.FindOne().SetProjection(bson.D{{"user_id", 1}, {"chats", 1}})
+	err := users.FindOne(ctx, filter, opts).Decode(&dbUser)
+	if err != nil {
+		log.Println("failed find a user: ", id)
+	}
+	log.Print(dbUser.ChatsID)
+	return len(dbUser.ChatsID) == 0
 }
 
 func AddUser(user *telego.User) error {
+	chatsArray := make([]primitive.ObjectID, 0)
 	u := &User{
 		ID:            primitive.NewObjectID(),
 		UserID:        user.ID,
@@ -74,7 +81,7 @@ func AddUser(user *telego.User) error {
 		Username:      user.Username,
 		LanguageCode:  user.LanguageCode,
 		IsPremium:     user.IsPremium,
-		ChatsID:       nil,
+		ChatsID:       chatsArray,
 		isActiveChats: false,
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
@@ -86,7 +93,6 @@ func AddUser(user *telego.User) error {
 func GetUser(id int64) (*User, error) {
 	filter := bson.D{{"user_id", id}}
 	var User *User
-	//opts := options.FindOne().SetProjection(bson.D{{"user_id", 1}, {"first_name", 1}})
 	err := users.FindOne(ctx, filter).Decode(&User)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -96,4 +102,30 @@ func GetUser(id int64) (*User, error) {
 		panic(err)
 	}
 	return User, nil
+}
+
+func NewChat(id int64, chat *telego.Chat) error {
+	ch := &Chat{
+		ID:        primitive.NewObjectID(),
+		ChatID:    chat.ID,
+		UserID:    id,
+		FirstName: chat.FirstName,
+		LastName:  chat.LastName,
+		Username:  chat.Username,
+		Type:      chat.Type,
+		isActive:  true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	res, err := chats.InsertOne(ctx, ch)
+	log.Println(res)
+	if err != nil {
+		log.Printf("failed to insert chat ID %v due to err:%s", chat.ID, err)
+		return err
+	}
+
+	res2, err := users.UpdateOne(ctx, bson.M{"user_id": id}, bson.M{"$addToSet": bson.M{"chats": chat.ID}})
+	log.Println(res2)
+
+	return nil
 }
