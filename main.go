@@ -36,7 +36,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Check and delete Webhook
+	// check and delete webhook
 	wh, _ := bot.GetWebhookInfo()
 	if wh.URL != "" {
 		log.Println("Webhook status: ", wh)
@@ -52,7 +52,7 @@ func main() {
 	// Call method getMe
 	botUser, _ := bot.GetMe()
 	fmt.Printf("Bot User: %+v\n", botUser)
-	allowedUpdates := []string{"message", "channel_post", "callback_query"}
+	allowedUpdates := []string{"message", "callback_query"}
 	params := telego.GetUpdatesParams{
 		//Offset:         0,
 		Limit:          100,
@@ -80,7 +80,7 @@ func main() {
 	//*** PRIVATE CHATS ***
 	//TODO: make forwarding private messages to channel discussion
 	//TODO: make welcome message and menu
-	//Handler for private chat commands
+	//Handler a private chat commands
 	bh.HandleMessage(func(bot *telego.Bot, message telego.Message) {
 		switch message.Text {
 		case "/start":
@@ -97,19 +97,23 @@ func main() {
 						`Добро пожаловать в бот технической поддержки клиентов!
 Опишите вашу проблему <b>одним сообщением</b> и мы постараемся ее решить в кратчайшин строки!`),
 				).WithParseMode("HTML"))
-				err := mdb.AddUser(message.From)
+
+				newUser, err := mdb.AddUser(message.From)
 				if err != nil {
 					log.Println("error addUser: ", err)
 				}
-				color.Yellow.Printf("Add user to Mongo: %d %s %s\n", message.From.ID, message.From.FirstName, message.From.LastName)
+				color.Yellow.Printf("Add user to Mongo: %d %s %s\n", newUser.ID, newUser.FirstName, newUser.LastName)
 			}
-		case "/new_request":
+		default:
 			_, _ = bot.SendMessage(tu.Message(tu.ID(message.Chat.ID),
 				fmt.Sprintf(`<i>Эта функция еще в разработке</i>`)).WithParseMode("HTML"))
 			_, _ = bot.SendSticker(tu.Sticker(tu.ID(message.Chat.ID), tu.FileByID("CAACAgIAAxkBAAOFY3PZDYNCi8QCC6YZmMW0KAgEL1sAAiUMAAKjYThKJoKMYxEN6pwrBA")))
 
 		}
-	}, th.AnyCommand())
+	}, th.AnyCommand(),
+		func(update telego.Update) bool {
+			return update.Message.Chat.Type == "private"
+		})
 
 	//Handle messages from user
 	bh.Handle(func(bot *telego.Bot, update telego.Update) {
@@ -121,22 +125,32 @@ func main() {
 					`Добро пожаловать в бот технической поддержки клиентов!
 Опишите вашу проблему <b>одним сообщением</b> и мы постараемся ее решить в кратчайшин строки!`),
 			).WithParseMode("HTML"))
-			if err := mdb.AddUser(update.Message.From); err != nil {
+
+			if _, err := mdb.AddUser(update.Message.From); err != nil {
 				log.Println("error addUser: ", err)
 			}
 		case user != nil:
-			check := mdb.IsFirstMessage(update.Message.From.ID)
-			if check {
-				err := mdb.NewChat(user.UserID, &update.Message.Chat)
+			// if the message is the first >> write to db and forward the request to the channel
+			chatID := mdb.FindChatID(update.Message.From.ID)
+			if chatID == 0 {
+				res, _ := bot.SendMessage(tu.Message(
+					tu.ID(settings.ChannelID), fmt.Sprintf(
+						"<b>Обращение #%d \nот @%s</b>\n\n%s\n",
+						update.Message.Chat.ID, update.Message.From.Username, update.Message.Text),
+				).WithParseMode("HTML"))
+
+				err := mdb.NewChat(user.UserID, res.MessageID, &res.Chat)
 				if err != nil {
 					log.Println("failed NewChat due ERR:", err)
 				}
-				//_, _ = bot.ForwardMessage(&telego.ForwardMessageParams{ChatID: tu.ID(settings.ChannelID), FromChatID: tu.ID(update.Message.Chat.ID), MessageID: update.Message.MessageID})
+
+			} else {
 				_, _ = bot.SendMessage(tu.Message(
-					tu.ID(settings.ChannelID), fmt.Sprintf(
-						"<b>Обращение #%d \nот @%s</b>\n\n<tg-spoiler>%s</tg-spoiler>\n", update.Message.Chat.ID, update.Message.From.Username, update.Message.Text),
-				).WithParseMode("HTML"))
+					tu.ID(settings.SupergroupID), fmt.Sprintf(
+						"<b>@%s</b>:\n%s", update.Message.From.Username, update.Message.Text),
+				).WithReplyToMessageID(chatID).WithParseMode("HTML"))
 			}
+			//_, _ = bot.ForwardMessage(&telego.ForwardMessageParams{ChatID: tu.ID(settings.ChannelID), FromChatID: tu.ID(update.Message.Chat.ID), MessageID: update.Message.MessageID})
 
 		}
 	}, th.Not(th.AnyCommand()), th.AnyMessageWithText(),
@@ -149,10 +163,14 @@ func main() {
 		// Send description message
 		_, _ = bot.SendMessage(tu.Message(
 			tu.ID(update.Message.Chat.ID),
-			fmt.Sprintf(
-				"<b>Тикет #%d.</b>\nОбращение от %s.\n<code>Для ответа пользователю воспользуйтесь функцией 'Ответить ⤺' на любое сообщение бота</code>",
-				update.Message.ForwardFromMessageID, update.Message.From.FirstName),
+			fmt.Sprintf("<code>Для ответа пользователю воспользуйтесь функцией 'Ответить ⤺' на любое сообщение бота</code>"),
 		).WithReplyToMessageID(update.Message.MessageID).WithParseMode("HTML").WithDisableNotification())
+
+		ok, err := mdb.UpdateChatID(update.Message.ForwardFromMessageID, update.Message.MessageID)
+		if err != nil {
+			log.Println("failed update chatID in post: ", err)
+		}
+		color.LightGreen.Println("updating post id:", ok)
 	}, func(update telego.Update) bool {
 		return update.Message.From.ID == 777000 &&
 			update.Message.IsAutomaticForward &&
@@ -177,6 +195,7 @@ func main() {
 			return update.Message.Chat.ID == settings.SupergroupID
 		})
 
+	//Handle CLOSE:NO
 	bh.HandleCallbackQuery(func(bot *telego.Bot, query telego.CallbackQuery) {
 		_, _ = bot.SendMessage(tu.Message(
 			tu.ID(query.Message.Chat.ID),
@@ -185,34 +204,35 @@ func main() {
 		)
 		// Answer callback query
 		_ = bot.AnswerCallbackQuery(tu.CallbackQuery(query.ID).WithText("Done"))
-	}, th.AnyCallbackQueryWithMessage(), th.CallbackDataEqualFold("close?no"))
+	},
+		th.AnyCallbackQueryWithMessage(), th.CallbackDataEqualFold("close?no"))
 
 	//Handle CLOSING request
-	bh.HandleCallbackQuery(
-		func(bot *telego.Bot, query telego.CallbackQuery) {
-			request := strings.TrimPrefix(query.Data, "close:")
-			user := query.From.Username
-			messageID := query.Message.MessageID
-			chatID := query.Message.Chat.ID
-			//_, _ = bot.SendMessage(tu.Message(
-			//	tu.ID(query.Message.Chat.ID),
-			//	fmt.Sprintf("Тикет №%s закрыт @%s", request, user),
-			//).WithReplyToMessageID(messageID),
-			//)
-			// Delete inline keyboard
-			_, _ = bot.EditMessageReplyMarkup(deleteInlineKeyboard(messageID, chatID))
-			editMessageParam := telego.EditMessageTextParams{}
-			_, _ = bot.EditMessageText(editMessageParam.WithChatID(tu.ID(chatID)).WithMessageID(messageID).WithText(
-				fmt.Sprintf("request #%s closed by @%s", request, user)))
+	bh.HandleCallbackQuery(func(bot *telego.Bot, query telego.CallbackQuery) {
+		request := strings.TrimPrefix(query.Data, "close:")
+		user := query.From.Username
+		messageID := query.Message.MessageID
+		chatID := query.Message.Chat.ID
+		//_, _ = bot.SendMessage(tu.Message(
+		//	tu.ID(query.Message.Chat.ID),
+		//	fmt.Sprintf("Тикет №%s закрыт @%s", request, user),
+		//).WithReplyToMessageID(messageID),
+		//)
+		// Delete inline keyboard
+		_, _ = bot.EditMessageReplyMarkup(deleteInlineKeyboard(messageID, chatID))
 
-			// Answer callback query
-			_ = bot.AnswerCallbackQuery(tu.CallbackQuery(query.ID).WithText(
-				fmt.Sprintf("request #%s closed by @%s", request, user)))
+		editMessageParam := telego.EditMessageTextParams{}
+		_, _ = bot.EditMessageText(editMessageParam.WithChatID(tu.ID(chatID)).WithMessageID(messageID).WithText(
+			fmt.Sprintf("request #%s closed by @%s", request, user)))
 
-			// Delete message
-			//deleteMessageParam := telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: messageID}
-			//_ = bot.DeleteMessage(&deleteMessageParam)
-		},
+		// Answer callback query
+		_ = bot.AnswerCallbackQuery(tu.CallbackQuery(query.ID).WithText(
+			fmt.Sprintf("request #%s closed by @%s", request, user)))
+
+		// Delete message
+		//deleteMessageParam := telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: messageID}
+		//_ = bot.DeleteMessage(&deleteMessageParam)
+	},
 		th.AnyCallbackQueryWithMessage(), th.CallbackDataPrefix("close:"))
 
 	// Start handling updates
@@ -221,7 +241,10 @@ func main() {
 
 func deleteInlineKeyboard(messageID int, chatID int64) *telego.EditMessageReplyMarkupParams {
 	editMarkupParams := telego.EditMessageReplyMarkupParams{}
-	emptyKeyboard := editMarkupParams.WithMessageID(messageID).WithChatID(tu.ID(chatID)).WithReplyMarkup(
-		&telego.InlineKeyboardMarkup{InlineKeyboard: make([][]telego.InlineKeyboardButton, 0)})
+	emptyKeyboard := editMarkupParams.WithMessageID(messageID).
+		WithChatID(tu.ID(chatID)).WithReplyMarkup(
+		&telego.InlineKeyboardMarkup{
+			InlineKeyboard: make([][]telego.InlineKeyboardButton, 0),
+		})
 	return emptyKeyboard
 }
