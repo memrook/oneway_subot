@@ -80,9 +80,9 @@ func init() {
 //	return len(dbUser.ChatsID) == 0
 //}
 
-func FindChatID(id int64) int {
+func FindChatID(userID int64) int {
 	var chat Chat
-	filter := bson.D{{"user_id", id}, {"isActive", true}}
+	filter := bson.D{{"user_id", userID}, {"isActive", true}}
 	opts := options.FindOne().SetProjection(bson.D{{"chat_id", 1}})
 	err := chats.FindOne(ctx, filter, opts).Decode(&chat)
 	if err != nil {
@@ -90,7 +90,7 @@ func FindChatID(id int64) int {
 			// This error means your query did not match any documents.
 			return 0
 		}
-		color.Red.Printf("failed db query chats.FindOne for userID: ", id)
+		color.Red.Printf("failed db query chats.FindOne for userID: ", userID)
 	}
 	color.LightGreen.Println("ChatID is ", chat.ChatID)
 	return chat.ChatID
@@ -98,10 +98,9 @@ func FindChatID(id int64) int {
 
 func UpdateChatID(postID int, chatID int) (bool, error) {
 	//opts := options.Update().SetUpsert(true)
-	//filter := bson.D{{"post_id", postID}}
-	//update := bson.D{{"$set", bson.D{{"chat_id", chatID}}}}
-	//res, err := chats.UpdateOne(context.TODO(), filter, update, opts)
-	res, err := chats.UpdateOne(ctx, bson.M{"post_id": postID}, bson.M{"$set": bson.M{"chat_id": chatID}})
+	res, err := chats.UpdateOne(ctx,
+		bson.M{"post_id": postID},
+		bson.M{"$set": bson.M{"chat_id": chatID}})
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			// This error means your query did not match any documents.
@@ -189,6 +188,25 @@ func AddMessage(chatID int, message *telego.Message) error {
 	if err != nil {
 		log.Printf("failed to insert new message %v due to err:%s", m.Text, err)
 	}
-	color.LightGreen.Println("Update messages: ", res)
+	color.LightGreen.Println("Add new message: ", res)
 	return nil
+}
+
+func GetUserByChatID(chatID int) (int64, error) {
+	var user User
+	filter := bson.M{"chat_id": chatID}
+	opts := options.FindOne().SetProjection(bson.D{{"user_id", 1}})
+	err := chats.FindOne(ctx, filter, opts).Decode(&user)
+	if err != nil {
+		if err == mongo.ErrNilDocument {
+			// This error means your query did not match any documents.
+			color.Red.Println("can't Find User by chat ID: ", err)
+			return 0, err
+		}
+		color.Red.Println("failed to Find User by chat ID: ", err)
+		return 0, err
+	}
+	userID := user.UserID
+	color.LightGreen.Println("Found User by Chat ID: ", userID)
+	return userID, nil
 }

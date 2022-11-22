@@ -175,12 +175,37 @@ func main() {
 		if err != nil {
 			log.Println("failed update chatID in post: ", err)
 		}
+		if ok {
+			if err == mdb.AddMessage(update.Message.MessageID, update.Message) {
+				log.Println(err)
+			}
+		}
+
 		color.LightGreen.Println("updating post id:", ok)
 	}, func(update telego.Update) bool {
 		return update.Message.From.ID == 777000 &&
 			update.Message.IsAutomaticForward &&
 			update.Message.Chat.ID == settings.SupergroupID &&
 			update.Message.SenderChat.ID == settings.ChannelID
+	})
+
+	bh.HandleMessage(func(bot *telego.Bot, message telego.Message) {
+		chatID, _ := mdb.GetUserByChatID(message.MessageThreadID)
+		if chatID != 0 {
+			_, _ = bot.SendMessage(tu.Message(
+				tu.ID(chatID), message.Text,
+			).WithParseMode("HTML"))
+
+			if err == mdb.AddMessage(message.MessageThreadID, &message) {
+				log.Println(err)
+			}
+		}
+	}, func(update telego.Update) bool {
+		if update.Message.Chat.ID == settings.SupergroupID &&
+			update.Message.ReplyToMessage != nil {
+			return update.Message.ReplyToMessage.From.ID == botUser.ID
+		}
+		return false
 	})
 
 	bh.HandleMessage(func(bot *telego.Bot, message telego.Message) {
