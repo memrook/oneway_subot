@@ -30,6 +30,7 @@ type User struct {
 }
 
 type Message struct {
+	From      string    `bson:"from"`
 	Text      string    `bson:"text"`
 	CreatedAt time.Time `bson:"created_at"`
 	UpdatedAt time.Time `bson:"updated_at"`
@@ -46,7 +47,7 @@ type Chat struct {
 	Username  string             `bson:"username"`
 	Type      string             `bson:"type"`
 	IsActive  bool               `bson:"isActive"`
-	Messages  []Message          `bson:"messages"`
+	Messages  []interface{}      `bson:"messages"`
 	CreatedAt time.Time          `bson:"created_at"`
 	UpdatedAt time.Time          `bson:"updated_at"`
 }
@@ -147,7 +148,7 @@ func GetUser(id int64) (*User, error) {
 }
 
 func NewChat(userID int64, messID int, chat *telego.Chat) error {
-	messages := make([]Message, 0)
+	messages := make([]interface{}, 0)
 	ch := &Chat{
 		ID:        primitive.NewObjectID(),
 		PostID:    messID,
@@ -172,5 +173,22 @@ func NewChat(userID int64, messID int, chat *telego.Chat) error {
 	res2, err := users.UpdateOne(ctx, bson.M{"user_id": userID}, bson.M{"$addToSet": bson.M{"chats": ch.ID}})
 	log.Println("res2: ", res2)
 
+	return nil
+}
+
+func AddMessage(chatID int, message *telego.Message) error {
+	m := Message{
+		From:      message.From.Username,
+		Text:      message.Text,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	res, err := chats.UpdateOne(ctx,
+		bson.M{"chat_id": chatID},
+		bson.M{"$addToSet": bson.M{"messages": m}})
+	if err != nil {
+		log.Printf("failed to insert new message %v due to err:%s", m.Text, err)
+	}
+	color.LightGreen.Println("Update messages: ", res)
 	return nil
 }

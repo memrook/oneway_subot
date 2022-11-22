@@ -149,6 +149,11 @@ func main() {
 					tu.ID(settings.SupergroupID), fmt.Sprintf(
 						"<b>@%s</b>:\n%s", update.Message.From.Username, update.Message.Text),
 				).WithReplyToMessageID(chatID).WithParseMode("HTML"))
+
+				if err == mdb.AddMessage(chatID, update.Message) {
+					log.Println(err)
+				}
+
 			}
 			//_, _ = bot.ForwardMessage(&telego.ForwardMessageParams{ChatID: tu.ID(settings.ChannelID), FromChatID: tu.ID(update.Message.Chat.ID), MessageID: update.Message.MessageID})
 

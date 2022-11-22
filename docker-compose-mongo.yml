@@ -1,4 +1,8 @@
 services:
+  bot:
+    image: golang:1.18-alpine
+    volumes:
+      - volume:
 
   mongo:
     image: mongo
