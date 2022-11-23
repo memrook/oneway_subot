@@ -30,10 +30,11 @@ type User struct {
 }
 
 type Message struct {
-	From      string    `bson:"from"`
-	Text      string    `bson:"text"`
-	CreatedAt time.Time `bson:"created_at"`
-	UpdatedAt time.Time `bson:"updated_at"`
+	ID        primitive.ObjectID `bson:"_id"`
+	From      string             `bson:"from"`
+	Text      string             `bson:"text"`
+	CreatedAt time.Time          `bson:"created_at"`
+	UpdatedAt time.Time          `bson:"updated_at"`
 }
 
 // Chat mongo structure
@@ -96,7 +97,7 @@ func FindChatID(userID int64) int {
 	return chat.ChatID
 }
 
-func UpdateChatID(postID int, chatID int) (bool, error) {
+func UpdateChatID(postID int, chatID int) error {
 	//opts := options.Update().SetUpsert(true)
 	res, err := chats.UpdateOne(ctx,
 		bson.M{"post_id": postID},
@@ -104,12 +105,12 @@ func UpdateChatID(postID int, chatID int) (bool, error) {
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			// This error means your query did not match any documents.
-			return false, err
+			return err
 		}
-		return false, err
+		return err
 	}
 	color.Cyan.Println(res)
-	return true, nil
+	return nil
 }
 
 func AddUser(user *telego.User) (*User, error) {
@@ -169,14 +170,16 @@ func NewChat(userID int64, messID int, chat *telego.Chat) error {
 		return err
 	}
 
-	res2, err := users.UpdateOne(ctx, bson.M{"user_id": userID}, bson.M{"$addToSet": bson.M{"chats": ch.ID}})
-	log.Println("res2: ", res2)
-
+	_, err = users.UpdateOne(ctx, bson.M{"user_id": userID}, bson.M{"$addToSet": bson.M{"chats": ch.ID}})
+	if err != nil {
+		color.Red.Println("failed to Update chatID: ", err)
+	}
 	return nil
 }
 
 func AddMessage(chatID int, message *telego.Message) error {
 	m := Message{
+		ID:        primitive.NewObjectID(),
 		From:      message.From.Username,
 		Text:      message.Text,
 		CreatedAt: time.Now(),
@@ -209,4 +212,22 @@ func GetUserByChatID(chatID int) (int64, error) {
 	userID := user.UserID
 	color.LightGreen.Println("Found User by Chat ID: ", userID)
 	return userID, nil
+}
+
+func CloseRequest(chatID int) error {
+	//opts := options.Update().SetUpsert(true)
+	res, err := chats.UpdateOne(ctx,
+		bson.M{"chat_id": chatID},
+		bson.M{"$set": bson.M{"isActive": false}})
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			// This error means your query did not match any documents.
+			color.Red.Println("no one chat status found and updated: ", err)
+			return err
+		}
+		color.Red.Println("failed to update chat status: ", err)
+		return err
+	}
+	color.LightGreen.Println("Chat status updated to 'false' : ", res)
+	return nil
 }

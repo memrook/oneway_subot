@@ -25,15 +25,15 @@ func SetBotCommands(bot *telego.Bot) {
 	}
 
 	privateBotCommands := []telego.BotCommand{
-		{Command: "start", Description: "Начнем, пожалуй"},
-		{Command: "list_requests", Description: "Список обращений"},
-		{Command: "new_request", Description: "Новое обращение"},
-		{Command: "close_request", Description: "Закрыть обращение"},
+		//{Command: "start", Description: "Начнем, пожалуй"},
+		//{Command: "list_requests", Description: "Список обращений"},
+		//{Command: "new_request", Description: "Новое обращение"},
+		{Command: "close", Description: "Закрыть обращение"},
 	}
 
 	groupChatsBotCommands := []telego.BotCommand{
-		{Command: "count", Description: "Количество открытых тикетов"},
-		{Command: "list", Description: "Список открытых тикетов"},
+		//{Command: "count", Description: "Количество открытых тикетов"},
+		//{Command: "list", Description: "Список открытых тикетов"},
 		{Command: "close", Description: "Закрыть тикет"},
 	}
 
