@@ -147,17 +147,17 @@ func GetUser(id int64) (*User, error) {
 	return User, nil
 }
 
-func NewChat(userID int64, messID int, chat *telego.Chat) error {
+func NewChat(messID int, message *telego.Message) error {
 	messages := make([]interface{}, 0)
 	ch := &Chat{
 		ID:        primitive.NewObjectID(),
 		PostID:    messID,
 		ChatID:    0,
-		UserID:    userID,
-		FirstName: chat.FirstName,
-		LastName:  chat.LastName,
-		Username:  chat.Username,
-		Type:      chat.Type,
+		UserID:    message.From.ID,
+		FirstName: message.From.FirstName,
+		LastName:  message.From.LastName,
+		Username:  message.From.Username,
+		Type:      message.Chat.Type,
 		IsActive:  true,
 		Messages:  messages,
 		CreatedAt: time.Now(),
@@ -166,11 +166,11 @@ func NewChat(userID int64, messID int, chat *telego.Chat) error {
 	res, err := chats.InsertOne(ctx, ch)
 	log.Println(res)
 	if err != nil {
-		log.Printf("failed to insert chat ID %v due to err:%s", chat.ID, err)
+		log.Printf("failed to insert chat ID %v due to err:%s", messID, err)
 		return err
 	}
 
-	_, err = users.UpdateOne(ctx, bson.M{"user_id": userID}, bson.M{"$addToSet": bson.M{"chats": ch.ID}})
+	_, err = users.UpdateOne(ctx, bson.M{"user_id": message.From.ID}, bson.M{"$addToSet": bson.M{"chats": ch.ID}})
 	if err != nil {
 		color.Red.Println("failed to Update chatID: ", err)
 	}
