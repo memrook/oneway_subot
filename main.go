@@ -17,6 +17,7 @@ type Settings struct {
 }
 
 var settings Settings
+var botUser *telego.User
 
 func main() {
 	file, _ := ioutil.ReadFile("Settings.json")
@@ -47,11 +48,12 @@ func main() {
 	SetBotCommands(bot)
 
 	// Call method getMe
-	botUser, _ := bot.GetMe()
+	botUser, _ = bot.GetMe()
 	fmt.Printf("Bot User: %+v\n", botUser)
+
 	allowedUpdates := []string{"message", "callback_query"}
 	params := telego.GetUpdatesParams{
-		//Offset:         0,
+		Offset:         0,
 		Limit:          100,
 		Timeout:        10,
 		AllowedUpdates: allowedUpdates,
@@ -74,6 +76,7 @@ func main() {
 
 	}, AnyChannelPost())
 
+	//A handlers functions contain in handlers.go
 	//Handle a private chat commands
 	bh.HandleMessage(handlePrivateCommands, AnyCommand(),
 		func(update telego.Update) bool {
@@ -82,7 +85,7 @@ func main() {
 
 	//Handle a messages from user
 	bh.HandleMessage(handlePrivateMessage,
-		Not(AnyCommand()), AnyMessageWithText(),
+		Not(AnyCommand()),
 		func(update telego.Update) bool {
 			return update.Message.Chat.Type == "private"
 		})

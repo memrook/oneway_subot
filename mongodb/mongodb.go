@@ -84,7 +84,9 @@ func init() {
 func FindChatID(userID int64) int {
 	var chat Chat
 	filter := bson.D{{"user_id", userID}, {"isActive", true}}
-	opts := options.FindOne().SetProjection(bson.D{{"chat_id", 1}})
+	opts := options.FindOne().
+		SetSort(bson.D{{"created_at", -1}}).
+		SetProjection(bson.D{{"chat_id", 1}})
 	err := chats.FindOne(ctx, filter, opts).Decode(&chat)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -229,5 +231,23 @@ func CloseRequest(chatID int) error {
 		return err
 	}
 	color.LightGreen.Println("Chat status updated to 'false' : ", res)
+	return nil
+}
+
+func CloseAllRequests(userID int64) error {
+	//opts := options.Update().SetUpsert(true)
+	res, err := chats.UpdateMany(ctx,
+		bson.M{"user_id": userID},
+		bson.M{"$set": bson.M{"isActive": false}})
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			// This error means your query did not match any documents.
+			color.Red.Println("no one chat status found and updated: ", err)
+			return err
+		}
+		color.Red.Println("failed to update chats status: ", err)
+		return err
+	}
+	color.LightGreen.Println("Chats statuses updated to 'false' : ", res)
 	return nil
 }

@@ -36,8 +36,8 @@ func handlePrivateCommands(bot *telego.Bot, message telego.Message) {
 			}
 			color.Yellow.Printf("Add user to Mongo: %d %s %s\n", newUser.ID, newUser.FirstName, newUser.LastName)
 		}
-	case "/close_request":
-
+	case "/close":
+		//TODO handle /close command, send YES|NO and send a quality question
 	default:
 		_, _ = bot.SendMessage(tu.Message(tu.ID(message.Chat.ID),
 			fmt.Sprintf(`<i>Эта функция еще в разработке</i>`)).WithParseMode("HTML"))
@@ -50,17 +50,24 @@ func handlePrivateCommands(bot *telego.Bot, message telego.Message) {
 }
 
 func handleGroupCommands(bot *telego.Bot, message telego.Message) {
-	// Send message with inline keyboard
-	_, _ = bot.SendMessage(tu.Message(
-		tu.ID(message.Chat.ID),
-		fmt.Sprintf("%s, уверены что хотите закрыть обращение?", message.From.FirstName),
-	).WithReplyToMessageID(message.MessageID).WithReplyMarkup(
-		tu.InlineKeyboard(
-			tu.InlineKeyboardRow(
-				tu.InlineKeyboardButton("ДА ✅").WithCallbackData("close:"+strconv.Itoa(message.MessageThreadID)),
-				tu.InlineKeyboardButton("НЕТ ❌").WithCallbackData("close?no"),
-			)),
-	))
+	switch message.Text {
+	case "/close@" + botUser.Username:
+		// Send message with inline keyboard
+		_, _ = bot.SendMessage(tu.Message(
+			tu.ID(message.Chat.ID),
+			fmt.Sprintf("%s, уверены что хотите закрыть обращение?", message.From.FirstName),
+		).WithReplyToMessageID(message.MessageID).WithReplyMarkup(
+			tu.InlineKeyboard(
+				tu.InlineKeyboardRow(
+					tu.InlineKeyboardButton("ДА ✅").WithCallbackData("close:"+strconv.Itoa(message.MessageThreadID)),
+					tu.InlineKeyboardButton("НЕТ ❌").WithCallbackData("close?no"),
+				)),
+		))
+	default:
+		_, _ = bot.SendMessage(tu.Message(tu.ID(message.Chat.ID),
+			fmt.Sprintf(`<i>Эта функция еще в разработке 🛠️</i>`)).
+			WithParseMode("HTML").WithReplyToMessageID(message.MessageThreadID))
+	}
 }
 
 func handlePrivateMessage(bot *telego.Bot, message telego.Message) {
@@ -95,15 +102,22 @@ func handlePrivateMessage(bot *telego.Bot, message telego.Message) {
 				log.Println("failed NewChat due ERR:", err)
 			}
 		} else {
-			_, _ = bot.SendMessage(tu.Message(
-				tu.ID(settings.SupergroupID), fmt.Sprintf(
-					"<b>@%s</b>:\n%s",
-					message.From.Username,
-					message.Text,
-				),
-			).WithReplyToMessageID(chatID).WithParseMode("HTML"))
+			_, err := bot.CopyMessage(tu.CopyMessage(
+				tu.ID(settings.SupergroupID),
+				tu.ID(message.Chat.ID),
+				message.MessageID,
+			).WithReplyToMessageID(chatID))
 
-			if err := mdb.AddMessage(chatID, &message); err != nil {
+			if err != nil {
+				if strings.Contains(err.Error(), "replied message not found") {
+					StartNewChat(bot, &message)
+					break
+				} else {
+					color.Red.Println("failed to send message due: ", err)
+					break
+				}
+			}
+			if err = mdb.AddMessage(chatID, &message); err != nil {
 				log.Println(err)
 			}
 
@@ -166,6 +180,37 @@ func handleCallbackQuery(bot *telego.Bot, query telego.CallbackQuery) {
 
 		deleteMessageParam := telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: messageID}
 		_ = bot.DeleteMessage(&deleteMessageParam)
+	}
+}
+
+func StartNewChat(bot *telego.Bot, message *telego.Message) {
+	if err := mdb.CloseAllRequests(message.From.ID); err != nil {
+		color.Red.Println("failed to CloseRequests")
+	}
+	//res, _ := bot.SendMessage(tu.Message(
+	//	tu.ID(settings.ChannelID), fmt.Sprintf(
+	//		"<b>Обращение #%d \nот @%s</b>\n\n%s\n",
+	//		message.Chat.ID,
+	//		message.From.Username,
+	//		message.Text,
+	//	),
+	//).WithParseMode("HTML"))
+	func() {
+		message.Text = fmt.Sprintf("<b>Обращение #%d \nот @%s</b>\n\n%s\n",
+			message.Chat.ID,
+			message.From.Username,
+			message.Text,
+		)
+	}()
+	res, _ := bot.CopyMessage(tu.CopyMessage(
+		tu.ID(settings.SupergroupID),
+		tu.ID(message.Chat.ID),
+		message.MessageID,
+	))
+
+	err := mdb.NewChat(res.MessageID, message)
+	if err != nil {
+		log.Println("failed NewChat due ERR:", err)
 	}
 }
 
