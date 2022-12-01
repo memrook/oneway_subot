@@ -29,8 +29,8 @@ func handlePrivateCommands(bot *telego.Bot, message telego.Message) {
 						"Опишите вашу проблему <b>одним сообщением</b> и мы "+
 						"постараемся ее решить в кратчайшин строки!"),
 			).WithParseMode("HTML"))
-
-			newUser, err := mdb.AddUser(message.From)
+			newUser := mdb.User{}
+			err := newUser.New(message.From)
 			if err != nil {
 				log.Println("error addUser: ", err)
 			}
@@ -81,12 +81,12 @@ func handlePrivateMessage(bot *telego.Bot, message telego.Message) {
 					"и мы постараемся ее решить в кратчайшин строки!"),
 		).WithParseMode("HTML"))
 
-		if _, err := mdb.AddUser(message.From); err != nil {
+		if err := mdb.User.New(mdb.User{}, message.From); err != nil {
 			log.Println("failed to addUser: ", err)
 		}
 	case user != nil:
 		// if the message is the first >> write to db and forward the request to the channel
-		chatID := mdb.FindChatID(message.From.ID)
+		chatID := mdb.Chat.FindByUserID(mdb.Chat{}, message.From.ID)
 		if chatID == 0 {
 			res, _ := bot.SendMessage(tu.Message(
 				tu.ID(settings.ChannelID), fmt.Sprintf(
@@ -101,6 +101,12 @@ func handlePrivateMessage(bot *telego.Bot, message telego.Message) {
 			if err != nil {
 				log.Println("failed NewChat due ERR:", err)
 			}
+
+			//Send the user a confirmation of the registration of a new chat
+			_, _ = bot.SendMessage(tu.Message(
+				tu.ID(message.Chat.ID), fmt.Sprintf(
+					"<i>Ваша заявка принята!</i>"),
+			).WithParseMode("HTML"))
 		} else {
 			_, err := bot.CopyMessage(tu.CopyMessage(
 				tu.ID(settings.SupergroupID),
@@ -110,7 +116,17 @@ func handlePrivateMessage(bot *telego.Bot, message telego.Message) {
 
 			if err != nil {
 				if strings.Contains(err.Error(), "replied message not found") {
-					StartNewChat(bot, &message)
+					//
+					_, _ = bot.SendMessage(tu.Message(
+						tu.ID(message.Chat.ID), fmt.Sprintf(
+							"Упс... Не могу найти ваше обращение 🥺\n"+
+								"Опишите пожалуйста вашу проблему "+
+								"и мы постараемся решить ее как можно быстрее!"),
+					).WithParseMode("HTML"))
+					err = mdb.CloseAllChats(message.From.ID)
+					if err != nil {
+						color.Red.Println("failed to close all chats due: ", err)
+					}
 					break
 				} else {
 					color.Red.Println("failed to send message due: ", err)
@@ -180,37 +196,6 @@ func handleCallbackQuery(bot *telego.Bot, query telego.CallbackQuery) {
 
 		deleteMessageParam := telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: messageID}
 		_ = bot.DeleteMessage(&deleteMessageParam)
-	}
-}
-
-func StartNewChat(bot *telego.Bot, message *telego.Message) {
-	if err := mdb.CloseAllRequests(message.From.ID); err != nil {
-		color.Red.Println("failed to CloseRequests")
-	}
-	//res, _ := bot.SendMessage(tu.Message(
-	//	tu.ID(settings.ChannelID), fmt.Sprintf(
-	//		"<b>Обращение #%d \nот @%s</b>\n\n%s\n",
-	//		message.Chat.ID,
-	//		message.From.Username,
-	//		message.Text,
-	//	),
-	//).WithParseMode("HTML"))
-	func() {
-		message.Text = fmt.Sprintf("<b>Обращение #%d \nот @%s</b>\n\n%s\n",
-			message.Chat.ID,
-			message.From.Username,
-			message.Text,
-		)
-	}()
-	res, _ := bot.CopyMessage(tu.CopyMessage(
-		tu.ID(settings.SupergroupID),
-		tu.ID(message.Chat.ID),
-		message.MessageID,
-	))
-
-	err := mdb.NewChat(res.MessageID, message)
-	if err != nil {
-		log.Println("failed NewChat due ERR:", err)
 	}
 }
 

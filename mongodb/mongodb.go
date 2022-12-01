@@ -81,13 +81,12 @@ func init() {
 //	return len(dbUser.ChatsID) == 0
 //}
 
-func FindChatID(userID int64) int {
-	var chat Chat
+func (ch Chat) FindByUserID(userID int64) int {
 	filter := bson.D{{"user_id", userID}, {"isActive", true}}
 	opts := options.FindOne().
 		SetSort(bson.D{{"created_at", -1}}).
 		SetProjection(bson.D{{"chat_id", 1}})
-	err := chats.FindOne(ctx, filter, opts).Decode(&chat)
+	err := chats.FindOne(ctx, filter, opts).Decode(&ch)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			// This error means your query did not match any documents.
@@ -95,8 +94,8 @@ func FindChatID(userID int64) int {
 		}
 		color.Red.Printf("failed db query chats.FindOne for userID: ", userID)
 	}
-	color.LightGreen.Println("ChatID is ", chat.ChatID)
-	return chat.ChatID
+	color.LightGreen.Println("ChatID is ", ch.ChatID)
+	return ch.ChatID
 }
 
 func UpdateChatID(postID int, chatID int) error {
@@ -115,24 +114,24 @@ func UpdateChatID(postID int, chatID int) error {
 	return nil
 }
 
-func AddUser(user *telego.User) (*User, error) {
+func (u User) New(user *telego.User) error {
 	chatsArray := make([]primitive.ObjectID, 0)
-	u := &User{
-		ID:           primitive.NewObjectID(),
-		UserID:       user.ID,
-		FirstName:    user.FirstName,
-		LastName:     user.LastName,
-		Username:     user.Username,
-		LanguageCode: user.LanguageCode,
-		IsPremium:    user.IsPremium,
-		ChatsID:      chatsArray,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
-	}
+	u.ID = primitive.NewObjectID()
+	u.Username = user.Username
+	u.UserID = user.ID
+	u.FirstName = user.FirstName
+	u.LastName = user.LastName
+	u.Username = user.Username
+	u.LanguageCode = user.LanguageCode
+	u.IsPremium = user.IsPremium
+	u.ChatsID = chatsArray
+	u.CreatedAt = time.Now()
+	u.UpdatedAt = time.Now()
+
 	if _, err := users.InsertOne(ctx, u); err != nil {
-		return nil, err
+		return err
 	}
-	return u, nil
+	return nil
 }
 
 func GetUser(id int64) (*User, error) {
@@ -150,6 +149,11 @@ func GetUser(id int64) (*User, error) {
 }
 
 func NewChat(messID int, message *telego.Message) error {
+	//Close all active chats before creating a new one
+	err := CloseAllChats(message.From.ID)
+	if err != nil {
+		log.Println("failed to close all chats due: ", err)
+	}
 	messages := make([]interface{}, 0)
 	ch := &Chat{
 		ID:        primitive.NewObjectID(),
@@ -165,6 +169,7 @@ func NewChat(messID int, message *telego.Message) error {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
+
 	res, err := chats.InsertOne(ctx, ch)
 	log.Println(res)
 	if err != nil {
@@ -234,7 +239,7 @@ func CloseRequest(chatID int) error {
 	return nil
 }
 
-func CloseAllRequests(userID int64) error {
+func CloseAllChats(userID int64) error {
 	//opts := options.Update().SetUpsert(true)
 	res, err := chats.UpdateMany(ctx,
 		bson.M{"user_id": userID},
