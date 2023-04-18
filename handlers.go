@@ -37,7 +37,7 @@ func handlePrivateCommands(bot *telego.Bot, message telego.Message) {
 			color.Yellow.Printf("Add user to Mongo: %d %s %s\n", newUser.ID, newUser.FirstName, newUser.LastName)
 		}
 	case "/close":
-
+		//TODO send a quality question
 		_, _ = bot.SendMessage(tu.Message(
 			tu.ID(message.Chat.ID),
 			fmt.Sprintf("%s, уверены что хотите закрыть обращение?", message.From.FirstName),
