@@ -34,17 +34,18 @@ func handlePrivateCommands(bot *telego.Bot, message telego.Message) {
 			if err != nil {
 				log.Println("error addUser: ", err)
 			}
-			color.Yellow.Printf("Add user to Mongo: %d %s %s\n", newUser.ID, newUser.FirstName, newUser.LastName)
+			color.Yellow.Printf("Add user to Mongodb: %d %s %s\n", newUser.ID, newUser.FirstName, newUser.LastName)
 		}
 	case "/close":
-
+		//TODO send a quality question
+		threadID := mdb.GetThreadIDbyUsername(message.Chat.Username)
 		_, _ = bot.SendMessage(tu.Message(
 			tu.ID(message.Chat.ID),
 			fmt.Sprintf("%s, уверены что хотите закрыть обращение?", message.From.FirstName),
 		).WithReplyToMessageID(message.MessageID).WithReplyMarkup(
 			tu.InlineKeyboard(
 				tu.InlineKeyboardRow(
-					tu.InlineKeyboardButton("ДА ✅").WithCallbackData("close:"+strconv.Itoa(message.MessageThreadID)),
+					tu.InlineKeyboardButton("ДА ✅").WithCallbackData("close:"+strconv.Itoa(threadID)),
 					tu.InlineKeyboardButton("НЕТ ❌").WithCallbackData("close?no"),
 				)),
 		))
@@ -187,15 +188,11 @@ func handleCallbackQuery(bot *telego.Bot, query telego.CallbackQuery) {
 	user := query.From.Username
 	messageID := query.Message.MessageID
 	chatID := query.Message.Chat.ID
-	threadID := query.Message.MessageThreadID
 
-	if threadID == 0 {
-		threadID = mdb.GetThreadIDbyUsername(user)
-	}
 	switch {
 	case strings.HasPrefix(query.Data, "close:"):
 
-		requestNumber := strings.TrimPrefix(query.Data, "close:")
+		threadID, _ := strconv.Atoi(strings.TrimPrefix(query.Data, "close:"))
 
 		if err := mdb.CloseRequest(threadID); err != nil {
 			color.Red.Println("failed to CloseRequest and Reply")
@@ -203,7 +200,7 @@ func handleCallbackQuery(bot *telego.Bot, query telego.CallbackQuery) {
 			_, _ = bot.EditMessageReplyMarkup(deleteInlineKeyboard(messageID, chatID))
 			editMessageParam := telego.EditMessageTextParams{}
 			_, _ = bot.EditMessageText(editMessageParam.WithChatID(tu.ID(chatID)).WithMessageID(messageID).WithText(
-				fmt.Sprintf("request #%s closed by @%s", requestNumber, user)))
+				fmt.Sprintf("request #%d closed by @%s", threadID, user)))
 		}
 	case query.Data == "close?no":
 
