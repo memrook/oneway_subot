@@ -1,5 +1,6 @@
 package main
 
+//goland:noinspection ALL
 const (
 	//just use the "fmt" package to print emoji
 	smile      string = "\xF0\x9F\x98\x81" //😁grinning face with smiling eyes

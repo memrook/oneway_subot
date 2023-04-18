@@ -81,7 +81,7 @@ func init() {
 //	return len(dbUser.ChatsID) == 0
 //}
 
-func (ch Chat) FindByUserID(userID int64) int {
+func (ch Chat) FindChatIDByUserID(userID int64) int {
 	filter := bson.D{{"user_id", userID}, {"isActive", true}}
 	opts := options.FindOne().
 		SetSort(bson.D{{"created_at", -1}}).
@@ -221,10 +221,9 @@ func GetUserByChatID(chatID int) (int64, error) {
 	return userID, nil
 }
 
-func CloseRequest(chatID int) error {
-	//opts := options.Update().SetUpsert(true)
+func CloseRequest(threadID int) error {
 	res, err := chats.UpdateOne(ctx,
-		bson.M{"chat_id": chatID},
+		bson.M{"chat_id": threadID},
 		bson.M{"$set": bson.M{"isActive": false}})
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -255,4 +254,22 @@ func CloseAllChats(userID int64) error {
 	}
 	color.LightGreen.Println("Chats statuses updated to 'false' : ", res)
 	return nil
+}
+
+func GetThreadIDbyUsername(username string) int {
+	var chat Chat
+	filter := bson.D{{"username", username}, {"isActive", true}}
+	opts := options.FindOne().
+		SetSort(bson.D{{"created_at", -1}}).
+		SetProjection(bson.D{{"chat_id", 1}})
+	err := chats.FindOne(ctx, filter, opts).Decode(&chat)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			// This error means your query did not match any documents.
+			return 0
+		}
+		color.Red.Printf("failed db query chats.FindOne for username: ", username, err)
+	}
+	color.LightGreen.Println("ThreadID is ", chat.ChatID)
+	return chat.ChatID
 }

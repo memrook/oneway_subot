@@ -113,9 +113,9 @@ func main() {
 	})
 
 	//Handle SuperGroup Callback
-	bh.HandleCallbackQuery(handleCallbackQuery, AnyCallbackQueryWithMessage(), func(update telego.Update) bool {
-		return update.CallbackQuery.Message.Chat.ID == settings.SupergroupID
-	})
+	bh.HandleCallbackQuery(handleCallbackQuery, AnyCallbackQueryWithMessage()) //	func(update telego.Update) bool {
+	//	return update.CallbackQuery.Message.Chat.ID == settings.SupergroupID
+	//}
 
 	// Start handling updates
 	bh.Start()
