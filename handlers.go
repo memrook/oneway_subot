@@ -2,14 +2,15 @@ package main
 
 import (
 	"fmt"
-	"github.com/mymmrac/telego"
-	tu "github.com/mymmrac/telego/telegoutil"
-	"go.mongodb.org/mongo-driver/mongo"
 	mdb "goland/oneWaySupportBot/mongodb"
-	"gopkg.in/gookit/color.v1"
 	"log"
 	"strconv"
 	"strings"
+
+	"github.com/mymmrac/telego"
+	tu "github.com/mymmrac/telego/telegoutil"
+	"go.mongodb.org/mongo-driver/mongo"
+	"gopkg.in/gookit/color.v1"
 )
 
 func handlePrivateCommands(bot *telego.Bot, message telego.Message) {
@@ -198,14 +199,34 @@ func handleCallbackQuery(bot *telego.Bot, query telego.CallbackQuery) {
 			color.Red.Println("failed to CloseRequest and Reply")
 		} else {
 			_, _ = bot.EditMessageReplyMarkup(deleteInlineKeyboard(messageID, chatID))
+
 			editMessageParam := telego.EditMessageTextParams{}
+
 			_, _ = bot.EditMessageText(editMessageParam.WithChatID(tu.ID(chatID)).WithMessageID(messageID).WithText(
 				fmt.Sprintf("request #%d closed by @%s", threadID, user)))
+			//TODO send the notify to the user when ticket closed by support
+			//send Survey
+			_, _ = bot.SendMessage(tu.Message(
+				tu.ID(chatID),
+				fmt.Sprintf("%s, пожалуйста оцените качество нашей работы! ", query.From.FirstName),
+			).WithReplyToMessageID(messageID).WithReplyMarkup(
+				tu.InlineKeyboard(
+					tu.InlineKeyboardRow(
+						tu.InlineKeyboardButton("⭐").WithCallbackData("survey:1:"+strconv.Itoa(threadID)),
+						tu.InlineKeyboardButton("⭐").WithCallbackData("survey:2:"+strconv.Itoa(threadID)),
+						tu.InlineKeyboardButton("⭐").WithCallbackData("survey:3:"+strconv.Itoa(threadID)),
+						tu.InlineKeyboardButton("⭐").WithCallbackData("survey:4:"+strconv.Itoa(threadID)),
+						tu.InlineKeyboardButton("⭐").WithCallbackData("survey:5:"+strconv.Itoa(threadID)),
+					)),
+			))
 		}
 	case query.Data == "close?no":
 
 		deleteMessageParam := telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: messageID}
 		_ = bot.DeleteMessage(&deleteMessageParam)
+
+	case strings.HasPrefix(query.Data, "survey:"):
+
 	}
 }
 
