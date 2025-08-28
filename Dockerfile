@@ -1,28 +1,59 @@
-## Build
-FROM golang-1.18-alpine AS build
+# Build stage
+FROM golang:1.21-alpine AS builder
 
-WORKDIR /app
+# Install dependencies
+RUN apk add --no-cache git ca-certificates tzdata
 
-COPY go.mod ./
-COPY go.sum ./
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
 RUN go mod download
 
+# Copy source code
 COPY . .
 
-RUN go build -o /supportBot
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o bot ./cmd/bot
 
-## Deploy
+# Production stage
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates
+# Install required packages
+RUN apk --no-cache add ca-certificates curl tzdata
 
-WORKDIR /
+# Create non-root user
+RUN addgroup -g 1001 -S botuser && \
+    adduser -u 1001 -S botuser -G botuser
 
-COPY --from=build /supportBot /supportBot
-COPY --from=build /settings.json /settings.json
+# Set working directory
+WORKDIR /app
 
-##EXPOSE 8080
+# Copy binary from builder stage
+COPY --from=builder /build/bot .
 
-##USER nonroot:nonroot
+# Copy configuration files
+COPY --from=builder /build/configs ./configs
 
-ENTRYPOINT ["/supportBot"]
+# Create logs directory
+RUN mkdir -p logs && \
+    chown -R botuser:botuser /app
+
+# Switch to non-root user
+USER botuser
+
+# Expose ports
+EXPOSE 8081 9090
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8081/health || exit 1
+
+# Run the application
+CMD ["./bot"]

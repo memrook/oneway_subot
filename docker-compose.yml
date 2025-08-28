@@ -1,0 +1,155 @@
+version: '3.8'
+
+services:
+  # Telegram Bot Application
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: oneway_support_bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - CHANNEL_ID=${CHANNEL_ID}
+      - SUPERGROUP_ID=${SUPERGROUP_ID}
+      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
+      - DATABASE_URI=mongodb://root:${MONGO_ROOT_PASSWORD}@mongo:27017/
+      - REDIS_URI=redis://redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - APP_ENV=production
+      - LOG_LEVEL=info
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - support_bot_network
+    volumes:
+      - ./logs:/app/logs
+      - ./configs:/app/configs:ro
+    ports:
+      - "8081:8081"  # Health check endpoint
+      - "9090:9090"  # Metrics endpoint
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # MongoDB Database
+  mongo:
+    image: mongo:7
+    container_name: oneway_mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: oneway_support
+    networks:
+      - support_bot_network
+    volumes:
+      - mongo_data:/data/db
+      - ./mongodb/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    command: mongod --auth
+
+  # Redis Cache (Optional)
+  redis:
+    image: redis:7-alpine
+    container_name: oneway_redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    networks:
+      - support_bot_network
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Prometheus Monitoring (Optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: oneway_prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - support_bot_network
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9091:9090"
+    profiles:
+      - monitoring
+
+  # Grafana Dashboard (Optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: oneway_grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    networks:
+      - support_bot_network
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    profiles:
+      - monitoring
+
+  # Nginx Reverse Proxy (Optional)
+  nginx:
+    image: nginx:alpine
+    container_name: oneway_nginx
+    restart: unless-stopped
+    networks:
+      - support_bot_network
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - bot
+    profiles:
+      - proxy
+
+networks:
+  support_bot_network:
+    driver: bridge
+
+volumes:
+  mongo_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
