@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -107,8 +108,18 @@ func Load(configPath string) (*Config, error) {
 	// Установка значений по умолчанию
 	setDefaults()
 
-	if err := viper.ReadInConfig(); err != nil {
+	// Читаем содержимое файла и подставляем переменные окружения
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Подстановка переменных окружения
+	expandedConfig := os.ExpandEnv(string(configData))
+
+	// Читаем конфигурацию из расширенной строки
+	if err := viper.ReadConfig(strings.NewReader(expandedConfig)); err != nil {
+		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
 	var config Config
