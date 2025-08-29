@@ -7,6 +7,7 @@ import (
 
 	"github.com/memrook/oneway_subot/internal/config"
 	"github.com/memrook/oneway_subot/pkg/logger"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -80,18 +81,18 @@ func (d *Database) createIndexes(ctx context.Context) error {
 	userCollection := d.GetCollection("users")
 	userIndexes := []mongo.IndexModel{
 		{
-			Keys:    map[string]interface{}{"user_id": 1},
+			Keys:    bson.D{{Key: "user_id", Value: 1}},
 			Options: options.Index().SetUnique(true),
 		},
 		{
-			Keys: map[string]interface{}{"username": 1},
+			Keys: bson.D{{Key: "username", Value: 1}},
 		},
 		{
-			Keys: map[string]interface{}{"created_at": -1},
+			Keys: bson.D{{Key: "created_at", Value: -1}},
 		},
 	}
 
-	if _, err := userCollection.Indexes().CreateMany(ctx, userIndexes); err != nil {
+	if _, err := userCollection.Indexes().CreateMany(ctx, userIndexes, options.CreateIndexes()); err != nil {
 		return fmt.Errorf("failed to create user indexes: %w", err)
 	}
 
@@ -99,62 +100,62 @@ func (d *Database) createIndexes(ctx context.Context) error {
 	ticketCollection := d.GetCollection("tickets")
 	ticketIndexes := []mongo.IndexModel{
 		{
-			Keys:    map[string]interface{}{"ticket_number": 1},
+			Keys:    bson.D{{Key: "ticket_number", Value: 1}},
 			Options: options.Index().SetUnique(true),
 		},
 		{
-			Keys: map[string]interface{}{"user_id": 1, "status": 1},
+			Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "status", Value: 1}},
 		},
 		{
-			Keys: map[string]interface{}{"status": 1},
+			Keys: bson.D{{Key: "status", Value: 1}},
 		},
 		{
-			Keys: map[string]interface{}{"channel_message_id": 1},
+			Keys: bson.D{{Key: "channel_message_id", Value: 1}},
 		},
 		{
-			Keys: map[string]interface{}{"group_message_id": 1},
+			Keys: bson.D{{Key: "group_message_id", Value: 1}},
 		},
 		{
-			Keys: map[string]interface{}{"thread_id": 1},
+			Keys: bson.D{{Key: "thread_id", Value: 1}},
 		},
 		{
-			Keys: map[string]interface{}{"assigned_to": 1},
+			Keys: bson.D{{Key: "assigned_to", Value: 1}},
 		},
 		{
-			Keys: map[string]interface{}{"priority": 1},
+			Keys: bson.D{{Key: "priority", Value: 1}},
 		},
 		{
-			Keys: map[string]interface{}{"created_at": -1},
+			Keys: bson.D{{Key: "created_at", Value: -1}},
 		},
 		{
-			Keys: map[string]interface{}{"updated_at": -1},
+			Keys: bson.D{{Key: "updated_at", Value: -1}},
 		},
 		{
-			Keys: map[string]interface{}{"closed_at": -1},
+			Keys: bson.D{{Key: "closed_at", Value: -1}},
 		},
 		{
-			Keys: map[string]interface{}{"tags": 1},
+			Keys: bson.D{{Key: "tags", Value: 1}},
 		},
 		{
 			// Составной индекс для активных тикетов пользователя
-			Keys: map[string]interface{}{
-				"user_id":    1,
-				"status":     1,
-				"created_at": -1,
+			Keys: bson.D{
+				{Key: "user_id", Value: 1},
+				{Key: "status", Value: 1},
+				{Key: "created_at", Value: -1},
 			},
 		},
 		{
 			// Текстовый индекс для поиска
-			Keys: map[string]interface{}{
-				"subject":       "text",
-				"description":   "text",
-				"messages.text": "text",
+			Keys: bson.D{
+				{Key: "subject", Value: "text"},
+				{Key: "description", Value: "text"},
+				{Key: "messages.text", Value: "text"},
 			},
 			Options: options.Index().SetDefaultLanguage("russian"),
 		},
 	}
 
-	if _, err := ticketCollection.Indexes().CreateMany(ctx, ticketIndexes); err != nil {
+	if _, err := ticketCollection.Indexes().CreateMany(ctx, ticketIndexes, options.CreateIndexes()); err != nil {
 		return fmt.Errorf("failed to create ticket indexes: %w", err)
 	}
 

@@ -11,6 +11,7 @@ import (
 	"github.com/memrook/oneway_subot/internal/models"
 	"github.com/memrook/oneway_subot/internal/service"
 	"github.com/memrook/oneway_subot/pkg/logger"
+	"github.com/memrook/oneway_subot/pkg/metrics"
 	"github.com/mymmrac/telego"
 	"github.com/mymmrac/telego/telegohandler"
 	"github.com/mymmrac/telego/telegoutil"
@@ -43,28 +44,43 @@ func NewTelegramHandler(
 // RegisterHandlers регистрирует все обработчики
 func (h *TelegramHandler) RegisterHandlers(bh *telegohandler.BotHandler) {
 	// Команды в приватном чате
-	bh.Handle(h.handlePrivateCommands, telegohandler.AnyCommand(), h.isPrivateChat)
+	bh.Handle(func(ctx *telegohandler.Context, update telego.Update) error {
+		h.handlePrivateCommands(ctx, ctx.Bot(), update)
+		return nil
+	}, telegohandler.AnyCommand(), func(ctx context.Context, update telego.Update) bool {
+		return h.isPrivateChat(update)
+	})
 
 	// Сообщения в приватном чате (не команды)
-	bh.Handle(h.handlePrivateMessage, telegohandler.Not(telegohandler.AnyCommand()), h.isPrivateChat)
-
-	// Сообщения из канала в группе (автопересылка)
-	bh.Handle(h.handleChannelPost, h.isChannelForward)
-
-	// Ответы в группе на сообщения бота
-	bh.Handle(h.handleGroupReply, h.isGroupReply)
+	bh.Handle(func(ctx *telegohandler.Context, update telego.Update) error {
+		h.handlePrivateMessage(ctx, ctx.Bot(), update)
+		return nil
+	}, telegohandler.Not(telegohandler.AnyCommand()), func(ctx context.Context, update telego.Update) bool {
+		return h.isPrivateChat(update)
+	})
 
 	// Команды в группе
-	bh.Handle(h.handleGroupCommands, telegohandler.AnyCommand(), h.isGroupChat)
+	bh.Handle(func(ctx *telegohandler.Context, update telego.Update) error {
+		h.handleGroupCommands(ctx, ctx.Bot(), update)
+		return nil
+	}, telegohandler.AnyCommand(), func(ctx context.Context, update telego.Update) bool {
+		return h.isGroupChat(update)
+	})
 
 	// Обработка callback запросов
-	bh.HandleCallbackQuery(h.handleCallbackQuery, telegohandler.AnyCallbackQueryWithMessage())
+	bh.HandleCallbackQuery(func(ctx *telegohandler.Context, query telego.CallbackQuery) error {
+		h.handleCallbackQuery(ctx, ctx.Bot(), query)
+		return nil
+	}, telegohandler.AnyCallbackQueryWithMessage())
 }
 
 // handlePrivateCommands обрабатывает команды в приватном чате
-func (h *TelegramHandler) handlePrivateCommands(bot *telego.Bot, update telego.Update) {
+func (h *TelegramHandler) handlePrivateCommands(ctx context.Context, bot *telego.Bot, update telego.Update) {
 	message := update.Message
-	ctx := context.Background()
+	startTime := time.Now()
+
+	// Записываем метрику о получении команды
+	metrics.RecordTelegramMessage("command", "received")
 
 	log := h.logger.WithFields(map[string]interface{}{
 		"user_id":   message.From.ID,
@@ -89,16 +105,27 @@ func (h *TelegramHandler) handlePrivateCommands(bot *telego.Bot, update telego.U
 	switch message.Text {
 	case "/start":
 		h.handleStartCommand(ctx, bot, message, log)
+		metrics.RecordTelegramMessage("command", "processed")
+		metrics.RecordResponseTime("start_command", time.Since(startTime).Seconds())
 	case "/help":
 		h.handleHelpCommand(bot, message)
+		metrics.RecordTelegramMessage("command", "processed")
+		metrics.RecordResponseTime("help_command", time.Since(startTime).Seconds())
 	case "/status":
 		h.handleStatusCommand(ctx, bot, message, log)
+		metrics.RecordTelegramMessage("command", "processed")
+		metrics.RecordResponseTime("status_command", time.Since(startTime).Seconds())
 	case "/close":
 		h.handleCloseCommand(ctx, bot, message, log)
+		metrics.RecordTelegramMessage("command", "processed")
+		metrics.RecordResponseTime("close_command", time.Since(startTime).Seconds())
 	case "/history":
 		h.handleHistoryCommand(ctx, bot, message, log)
+		metrics.RecordTelegramMessage("command", "processed")
+		metrics.RecordResponseTime("history_command", time.Since(startTime).Seconds())
 	default:
 		h.sendMessage(bot, message.Chat.ID, "❓ Неизвестная команда. Используйте /help для просмотра доступных команд.")
+		metrics.RecordTelegramMessage("command", "unknown")
 	}
 }
 
@@ -222,7 +249,7 @@ func (h *TelegramHandler) handleStatusCommand(ctx context.Context, bot *telego.B
 		},
 	}
 
-	_, err = bot.SendMessage(&telego.SendMessageParams{
+	_, err = bot.SendMessage(ctx, &telego.SendMessageParams{
 		ChatID:      telegoutil.ID(message.Chat.ID),
 		Text:        text,
 		ParseMode:   "HTML",
@@ -262,7 +289,7 @@ func (h *TelegramHandler) handleCloseCommand(ctx context.Context, bot *telego.Bo
 		ticket.TicketNumber,
 	)
 
-	_, err = bot.SendMessage(&telego.SendMessageParams{
+	_, err = bot.SendMessage(ctx, &telego.SendMessageParams{
 		ChatID:      telegoutil.ID(message.Chat.ID),
 		Text:        text,
 		ParseMode:   "HTML",
@@ -336,9 +363,8 @@ func (h *TelegramHandler) handleHistoryCommand(ctx context.Context, bot *telego.
 }
 
 // handlePrivateMessage обрабатывает обычные сообщения в приватном чате
-func (h *TelegramHandler) handlePrivateMessage(bot *telego.Bot, update telego.Update) {
+func (h *TelegramHandler) handlePrivateMessage(ctx context.Context, bot *telego.Bot, update telego.Update) {
 	message := update.Message
-	ctx := context.Background()
 
 	log := h.logger.WithFields(map[string]interface{}{
 		"user_id":   message.From.ID,
@@ -408,8 +434,12 @@ func (h *TelegramHandler) createNewTicket(ctx context.Context, bot *telego.Bot, 
 	if err != nil {
 		log.WithError(err).Error("Failed to create ticket")
 		h.sendErrorMessage(bot, message.Chat.ID, "Произошла ошибка при создании обращения")
+		metrics.RecordError("ticket_service", "create_failed")
 		return
 	}
+
+	// Записываем метрику создания тикета
+	metrics.RecordTicketCreated(string(ticket.Priority), "user_message")
 
 	// Отправляем сообщение в канал
 	channelText := fmt.Sprintf(
@@ -423,7 +453,7 @@ func (h *TelegramHandler) createNewTicket(ctx context.Context, bot *telego.Bot, 
 		ticket.Description,
 	)
 
-	channelMessage, err := bot.SendMessage(&telego.SendMessageParams{
+	channelMessage, err := bot.SendMessage(ctx, &telego.SendMessageParams{
 		ChatID:    telegoutil.ID(h.config.Bot.ChannelID),
 		Text:      channelText,
 		ParseMode: "HTML",
@@ -477,11 +507,11 @@ func (h *TelegramHandler) addMessageToTicket(ctx context.Context, bot *telego.Bo
 
 	// Пересылаем сообщение в группу поддержки
 	if ticket.ThreadID != 0 {
-		_, err = bot.CopyMessage(&telego.CopyMessageParams{
-			ChatID:           telegoutil.ID(h.config.Bot.GroupID),
-			FromChatID:       telegoutil.ID(message.Chat.ID),
-			MessageID:        message.MessageID,
-			ReplyToMessageID: &ticket.ThreadID,
+		_, err = bot.CopyMessage(ctx, &telego.CopyMessageParams{
+			ChatID:          telegoutil.ID(h.config.Bot.GroupID),
+			FromChatID:      telegoutil.ID(message.Chat.ID),
+			MessageID:       message.MessageID,
+			ReplyParameters: &telego.ReplyParameters{MessageID: ticket.ThreadID},
 		})
 		if err != nil {
 			log.WithError(err).Error("Failed to copy message to support group")
@@ -515,7 +545,8 @@ func (h *TelegramHandler) extractSubject(text string) string {
 }
 
 func (h *TelegramHandler) sendMessage(bot *telego.Bot, chatID int64, text string) {
-	_, err := bot.SendMessage(&telego.SendMessageParams{
+	ctx := context.Background()
+	_, err := bot.SendMessage(ctx, &telego.SendMessageParams{
 		ChatID:    telegoutil.ID(chatID),
 		Text:      text,
 		ParseMode: "HTML",
@@ -556,27 +587,59 @@ func (h *TelegramHandler) isGroupReply(update telego.Update) bool {
 		update.Message.Chat.ID == h.config.Bot.GroupID &&
 		update.Message.ReplyToMessage != nil &&
 		update.Message.ReplyToMessage.From != nil &&
-		update.Message.ReplyToMessage.From.ID == h.config.Bot.GetBotUser().ID
+		update.Message.ReplyToMessage.From.ID == 0 // TODO: Get bot ID
 }
 
 // handleChannelPost обрабатывает посты из канала
-func (h *TelegramHandler) handleChannelPost(bot *telego.Bot, update telego.Update) {
+func (h *TelegramHandler) handleChannelPost(ctx context.Context, bot *telego.Bot, update telego.Update) {
 	// TODO: Implement channel post handling
 }
 
 // handleGroupReply обрабатывает ответы в группе
-func (h *TelegramHandler) handleGroupReply(bot *telego.Bot, update telego.Update) {
+func (h *TelegramHandler) handleGroupReply(ctx context.Context, bot *telego.Bot, update telego.Update) {
 	// TODO: Implement group reply handling
 }
 
 // handleGroupCommands обрабатывает команды в группе
-func (h *TelegramHandler) handleGroupCommands(bot *telego.Bot, update telego.Update) {
-	// TODO: Implement group commands handling
+func (h *TelegramHandler) handleGroupCommands(ctx context.Context, bot *telego.Bot, update telego.Update) {
+	message := update.Message
+
+	log := h.logger.WithFields(map[string]interface{}{
+		"user_id":   message.From.ID,
+		"username":  message.From.Username,
+		"command":   message.Text,
+		"chat_type": message.Chat.Type,
+		"chat_id":   message.Chat.ID,
+	})
+
+	// Проверяем, что это команда в нашей группе поддержки
+	if message.Chat.ID != h.config.Bot.GroupID {
+		return
+	}
+
+	// Записываем метрику
+	metrics.RecordTelegramMessage("group_command", "received")
+
+	switch {
+	case strings.HasPrefix(message.Text, "/stats"):
+		h.handleStatsCommand(ctx, bot, message, log)
+	case strings.HasPrefix(message.Text, "/assign"):
+		h.handleAssignCommand(ctx, bot, message, log)
+	case strings.HasPrefix(message.Text, "/close"):
+		h.handleAdminCloseCommand(ctx, bot, message, log)
+	// case strings.HasPrefix(message.Text, "/reopen"):
+	//	h.handleReopenCommand(ctx, bot, message, log)
+	// case strings.HasPrefix(message.Text, "/priority"):
+	//	h.handlePriorityCommand(ctx, bot, message, log)
+	case strings.HasPrefix(message.Text, "/ban"):
+		h.handleBanCommand(ctx, bot, message, log)
+	case strings.HasPrefix(message.Text, "/unban"):
+		h.handleUnbanCommand(ctx, bot, message, log)
+	}
 }
 
 // handleCallbackQuery обрабатывает callback запросы
-func (h *TelegramHandler) handleCallbackQuery(bot *telego.Bot, query telego.CallbackQuery) {
-	ctx := context.Background()
+func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, bot *telego.Bot, query telego.CallbackQuery) {
 
 	log := h.logger.WithFields(map[string]interface{}{
 		"user_id":       query.From.ID,
@@ -586,13 +649,13 @@ func (h *TelegramHandler) handleCallbackQuery(bot *telego.Bot, query telego.Call
 	switch {
 	case strings.HasPrefix(query.Data, "confirm_close:"):
 		h.handleConfirmClose(ctx, bot, query, log)
-	case strings.HasPrefix(query.Data, "close_ticket:"):
-		h.handleCloseTicket(ctx, bot, query, log)
+	// case strings.HasPrefix(query.Data, "close_ticket:"):
+	//	h.handleCloseTicket(ctx, bot, query, log)
 	case query.Data == "cancel_close":
 		h.handleCancelClose(bot, query)
 	case query.Data == "refresh_status":
 		h.handleRefreshStatus(ctx, bot, query, log)
-	case strings.HasPrefix(query.Data, "rate:"):
+	case strings.HasPrefix(query.Data, "rate_"):
 		h.handleRating(ctx, bot, query, log)
 	default:
 		h.answerCallbackQuery(bot, query.ID, "❓ Неизвестное действие")
@@ -612,23 +675,27 @@ func (h *TelegramHandler) handleConfirmClose(ctx context.Context, bot *telego.Bo
 	if err != nil {
 		log.WithError(err).Error("Failed to close ticket")
 		h.answerCallbackQuery(bot, query.ID, "❌ Ошибка при закрытии обращения")
+		metrics.RecordError("ticket_service", "close_failed")
 		return
 	}
 
+	// Записываем метрику закрытия тикета
+	metrics.RecordTicketClosed("closed", "user")
+
 	// Удаляем клавиатуру и обновляем сообщение
-	_, err = bot.EditMessageText(&telego.EditMessageTextParams{
-		ChatID:    telegoutil.ID(query.Message.Chat.ID),
-		MessageID: query.Message.MessageID,
+	_, err = bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+		ChatID:    telegoutil.ID(query.Message.GetChat().ID),
+		MessageID: query.Message.GetMessageID(),
 		Text:      "✅ Обращение закрыто!\n\nСпасибо за обращение. Пожалуйста, оцените качество обслуживания:",
 		ParseMode: "HTML",
 		ReplyMarkup: &telego.InlineKeyboardMarkup{
 			InlineKeyboard: [][]telego.InlineKeyboardButton{
 				{
-					{Text: "⭐", CallbackData: fmt.Sprintf("rate:%s:1", ticketIDStr)},
-					{Text: "⭐⭐", CallbackData: fmt.Sprintf("rate:%s:2", ticketIDStr)},
-					{Text: "⭐⭐⭐", CallbackData: fmt.Sprintf("rate:%s:3", ticketIDStr)},
-					{Text: "⭐⭐⭐⭐", CallbackData: fmt.Sprintf("rate:%s:4", ticketIDStr)},
-					{Text: "⭐⭐⭐⭐⭐", CallbackData: fmt.Sprintf("rate:%s:5", ticketIDStr)},
+					{Text: "⭐", CallbackData: fmt.Sprintf("rate_%s_1", ticketIDStr)},
+					{Text: "⭐⭐", CallbackData: fmt.Sprintf("rate_%s_2", ticketIDStr)},
+					{Text: "⭐⭐⭐", CallbackData: fmt.Sprintf("rate_%s_3", ticketIDStr)},
+					{Text: "⭐⭐⭐⭐", CallbackData: fmt.Sprintf("rate_%s_4", ticketIDStr)},
+					{Text: "⭐⭐⭐⭐⭐", CallbackData: fmt.Sprintf("rate_%s_5", ticketIDStr)},
 				},
 			},
 		},
@@ -641,7 +708,8 @@ func (h *TelegramHandler) handleConfirmClose(ctx context.Context, bot *telego.Bo
 }
 
 func (h *TelegramHandler) handleRating(ctx context.Context, bot *telego.Bot, query telego.CallbackQuery, log logger.Logger) {
-	parts := strings.Split(query.Data, ":")
+	// Формат: rate_<ticket_id>_<rating>
+	parts := strings.Split(query.Data, "_")
 	if len(parts) != 3 {
 		log.Error("Invalid rating callback data format")
 		h.answerCallbackQuery(bot, query.ID, "❌ Неверный формат данных")
@@ -673,14 +741,18 @@ func (h *TelegramHandler) handleRating(ctx context.Context, bot *telego.Bot, que
 	if err != nil {
 		log.WithError(err).Error("Failed to submit survey")
 		h.answerCallbackQuery(bot, query.ID, "❌ Ошибка при сохранении оценки")
+		metrics.RecordError("survey", "submit_failed")
 		return
 	}
 
+	// Записываем метрику рейтинга
+	metrics.RecordUserRating(rating)
+
 	// Обновляем сообщение
 	ratingText := strings.Repeat("⭐", rating)
-	_, err = bot.EditMessageText(&telego.EditMessageTextParams{
-		ChatID:    telegoutil.ID(query.Message.Chat.ID),
-		MessageID: query.Message.MessageID,
+	_, err = bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+		ChatID:    telegoutil.ID(query.Message.GetChat().ID),
+		MessageID: query.Message.GetMessageID(),
 		Text:      fmt.Sprintf("✅ Спасибо за оценку!\n\n%s (%d/5)\n\nВаше мнение поможет нам стать лучше!", ratingText, rating),
 		ParseMode: "HTML",
 	})
@@ -693,9 +765,10 @@ func (h *TelegramHandler) handleRating(ctx context.Context, bot *telego.Bot, que
 
 func (h *TelegramHandler) handleCancelClose(bot *telego.Bot, query telego.CallbackQuery) {
 	// Удаляем сообщение с подтверждением
-	err := bot.DeleteMessage(&telego.DeleteMessageParams{
-		ChatID:    telegoutil.ID(query.Message.Chat.ID),
-		MessageID: query.Message.MessageID,
+	ctx := context.Background()
+	err := bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
+		ChatID:    telegoutil.ID(query.Message.GetChat().ID),
+		MessageID: query.Message.GetMessageID(),
 	})
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to delete message")
@@ -707,9 +780,9 @@ func (h *TelegramHandler) handleCancelClose(bot *telego.Bot, query telego.Callba
 func (h *TelegramHandler) handleRefreshStatus(ctx context.Context, bot *telego.Bot, query telego.CallbackQuery, log logger.Logger) {
 	// Перезапускаем команду /status
 	message := &telego.Message{
-		MessageID: query.Message.MessageID,
-		From:      query.From,
-		Chat:      query.Message.Chat,
+		MessageID: query.Message.GetMessageID(),
+		From:      &query.From,
+		Chat:      query.Message.GetChat(),
 		Text:      "/status",
 	}
 
@@ -718,7 +791,8 @@ func (h *TelegramHandler) handleRefreshStatus(ctx context.Context, bot *telego.B
 }
 
 func (h *TelegramHandler) answerCallbackQuery(bot *telego.Bot, queryID string, text string) {
-	err := bot.AnswerCallbackQuery(&telego.AnswerCallbackQueryParams{
+	ctx := context.Background()
+	err := bot.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
 		CallbackQueryID: queryID,
 		Text:            text,
 		ShowAlert:       false,
@@ -732,8 +806,141 @@ func (h *TelegramHandler) parseObjectID(idStr string) (primitive.ObjectID, error
 	return primitive.ObjectIDFromHex(idStr)
 }
 
-// Методы конфигурации бота
-func (c *config.BotConfig) GetBotUser() *telego.User {
-	// TODO: Implement bot user retrieval
-	return &telego.User{ID: 0}
+// Administrative commands
+
+// handleStatsCommand показывает статистику тикетов
+func (h *TelegramHandler) handleStatsCommand(ctx context.Context, bot *telego.Bot, message *telego.Message, log logger.Logger) {
+	// Получаем статистику открытых тикетов
+	openTickets, err := h.services.Ticket.GetOpenTickets(ctx)
+	if err != nil {
+		log.WithError(err).Error("Failed to get open tickets")
+		h.sendMessage(bot, message.Chat.ID, "❌ Ошибка при получении статистики")
+		return
+	}
+
+	// Подсчитываем по статусам
+	stats := make(map[string]int)
+	for _, ticket := range openTickets {
+		stats[string(ticket.Status)]++
+	}
+
+	statsText := "📊 <b>Статистика тикетов</b>\n\n"
+	statsText += fmt.Sprintf("🟢 Новые: %d\n", stats["open"])
+	statsText += fmt.Sprintf("🔵 В работе: %d\n", stats["in_progress"])
+	statsText += fmt.Sprintf("🟡 Ожидание: %d\n", stats["waiting"])
+	statsText += fmt.Sprintf("\n📈 Всего активных: %d", len(openTickets))
+
+	h.sendMessage(bot, message.Chat.ID, statsText)
+}
+
+// handleAssignCommand назначает тикет на администратора
+func (h *TelegramHandler) handleAssignCommand(ctx context.Context, bot *telego.Bot, message *telego.Message, log logger.Logger) {
+	parts := strings.Fields(message.Text)
+	if len(parts) < 2 {
+		h.sendMessage(bot, message.Chat.ID, "❗ Использование: /assign <номер_тикета> [@пользователь]")
+		return
+	}
+
+	ticketNumber := parts[1]
+	ticket, err := h.services.Ticket.GetTicketByNumber(ctx, ticketNumber)
+	if err != nil {
+		log.WithError(err).Error("Failed to get ticket")
+		h.sendMessage(bot, message.Chat.ID, "❌ Тикет не найден")
+		return
+	}
+
+	var assignedTo int64 = message.From.ID
+
+	err = h.services.Ticket.AssignTicket(ctx, ticket.ID, assignedTo)
+	if err != nil {
+		log.WithError(err).Error("Failed to assign ticket")
+		h.sendMessage(bot, message.Chat.ID, "❌ Ошибка при назначении тикета")
+		metrics.RecordError("ticket_service", "assign_failed")
+		return
+	}
+
+	h.sendMessage(bot, message.Chat.ID, fmt.Sprintf("✅ Тикет #%s назначен на %s", ticketNumber, message.From.FirstName))
+}
+
+// handleAdminCloseCommand закрывает тикет администратором
+func (h *TelegramHandler) handleAdminCloseCommand(ctx context.Context, bot *telego.Bot, message *telego.Message, log logger.Logger) {
+	parts := strings.Fields(message.Text)
+	if len(parts) < 2 {
+		h.sendMessage(bot, message.Chat.ID, "❗ Использование: /close <номер_тикета>")
+		return
+	}
+
+	ticketNumber := parts[1]
+	ticket, err := h.services.Ticket.GetTicketByNumber(ctx, ticketNumber)
+	if err != nil {
+		log.WithError(err).Error("Failed to get ticket")
+		h.sendMessage(bot, message.Chat.ID, "❌ Тикет не найден")
+		return
+	}
+
+	err = h.services.Ticket.CloseTicket(ctx, ticket.ID, message.From.ID)
+	if err != nil {
+		log.WithError(err).Error("Failed to close ticket")
+		h.sendMessage(bot, message.Chat.ID, "❌ Ошибка при закрытии тикета")
+		metrics.RecordError("ticket_service", "admin_close_failed")
+		return
+	}
+
+	metrics.RecordTicketClosed("closed", "admin")
+	h.sendMessage(bot, message.Chat.ID, fmt.Sprintf("✅ Тикет #%s закрыт администратором", ticketNumber))
+}
+
+// handleBanCommand блокирует пользователя
+func (h *TelegramHandler) handleBanCommand(ctx context.Context, bot *telego.Bot, message *telego.Message, log logger.Logger) {
+	parts := strings.Fields(message.Text)
+	if len(parts) < 2 {
+		h.sendMessage(bot, message.Chat.ID, "❗ Использование: /ban <user_id> [причина]")
+		return
+	}
+
+	userIDStr := parts[1]
+	userID, err := strconv.ParseInt(userIDStr, 10, 64)
+	if err != nil {
+		h.sendMessage(bot, message.Chat.ID, "❌ Неверный ID пользователя")
+		return
+	}
+
+	reason := "Заблокирован администратором"
+	if len(parts) > 2 {
+		reason = strings.Join(parts[2:], " ")
+	}
+
+	err = h.services.User.BlockUser(ctx, userID, reason)
+	if err != nil {
+		log.WithError(err).Error("Failed to block user")
+		h.sendMessage(bot, message.Chat.ID, "❌ Ошибка при блокировке пользователя")
+		return
+	}
+
+	h.sendMessage(bot, message.Chat.ID, fmt.Sprintf("✅ Пользователь %d заблокирован", userID))
+}
+
+// handleUnbanCommand разблокирует пользователя
+func (h *TelegramHandler) handleUnbanCommand(ctx context.Context, bot *telego.Bot, message *telego.Message, log logger.Logger) {
+	parts := strings.Fields(message.Text)
+	if len(parts) < 2 {
+		h.sendMessage(bot, message.Chat.ID, "❗ Использование: /unban <user_id>")
+		return
+	}
+
+	userIDStr := parts[1]
+	userID, err := strconv.ParseInt(userIDStr, 10, 64)
+	if err != nil {
+		h.sendMessage(bot, message.Chat.ID, "❌ Неверный ID пользователя")
+		return
+	}
+
+	err = h.services.User.UnblockUser(ctx, userID)
+	if err != nil {
+		log.WithError(err).Error("Failed to unblock user")
+		h.sendMessage(bot, message.Chat.ID, "❌ Ошибка при разблокировке пользователя")
+		return
+	}
+
+	h.sendMessage(bot, message.Chat.ID, fmt.Sprintf("✅ Пользователь %d разблокирован", userID))
 }
