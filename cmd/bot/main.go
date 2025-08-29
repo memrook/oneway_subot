@@ -42,6 +42,7 @@ func main() {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
 
+	printBanner(cfg)
 	logger.Infof("Starting %s v%s", cfg.App.Name, cfg.App.Version)
 
 	// Подключение к базе данных
@@ -81,8 +82,11 @@ func main() {
 		Analytics:    analyticsService,
 	}
 
+	// Создание контекста для graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+
 	// Создание обработчика бота
-	updates, err := bot.UpdatesViaLongPolling(nil)
+	updates, err := bot.UpdatesViaLongPolling(ctx, nil)
 	if err != nil {
 		logger.Fatalf("Failed to start polling: %v", err)
 	}
@@ -96,9 +100,6 @@ func main() {
 	// Регистрация обработчиков Telegram
 	telegramHandler := handlers.NewTelegramHandler(bot, services, cfg, logger.WithField("component", "telegram_handler"))
 	telegramHandler.RegisterHandlers(bh)
-
-	// Создание контекста для graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Обработка сигналов для graceful shutdown
@@ -170,7 +171,6 @@ func main() {
 
 	// Остановка бота
 	bh.Stop()
-	bot.StopLongPolling()
 
 	// Обновляем статус компонентов
 	metrics.SetBotStatus("telegram_bot", 0)
