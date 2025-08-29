@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -172,7 +173,7 @@ func (rl *RateLimiter) sendRateLimitMessage(bot *telego.Bot, chatID int64) {
 		"Пожалуйста, подождите немного перед отправкой следующего сообщения.\n\n" +
 		"🕐 Лимит: " + fmt.Sprintf("%d сообщений в минуту", rl.config.Bot.RateLimit.RequestsPerMinute)
 
-	_, err := bot.SendMessage(&telego.SendMessageParams{
+	_, err := bot.SendMessage(context.Background(), &telego.SendMessageParams{
 		ChatID:    telego.ChatID{ID: chatID},
 		Text:      message,
 		ParseMode: "HTML",
@@ -185,7 +186,7 @@ func (rl *RateLimiter) sendRateLimitMessage(bot *telego.Bot, chatID int64) {
 
 // answerCallbackWithError отвечает на callback с ошибкой
 func (rl *RateLimiter) answerCallbackWithError(bot *telego.Bot, callbackQueryID string) {
-	_, err := bot.AnswerCallbackQuery(&telego.AnswerCallbackQueryParams{
+	err := bot.AnswerCallbackQuery(context.Background(), &telego.AnswerCallbackQueryParams{
 		CallbackQueryID: callbackQueryID,
 		Text:            "⚠️ Слишком много запросов. Подождите немного.",
 		ShowAlert:       true,

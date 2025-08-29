@@ -67,6 +67,14 @@ func (h *TelegramHandler) RegisterHandlers(bh *telegohandler.BotHandler) {
 		return h.isGroupChat(update)
 	})
 
+	// Сообщения в комментариях канала
+	bh.Handle(func(ctx *telegohandler.Context, update telego.Update) error {
+		h.handleChannelComments(ctx, ctx.Bot(), update)
+		return nil
+	}, telegohandler.AnyMessage(), func(ctx context.Context, update telego.Update) bool {
+		return h.isChannelComment(update)
+	})
+
 	// Обработка callback запросов
 	bh.HandleCallbackQuery(func(ctx *telegohandler.Context, query telego.CallbackQuery) error {
 		h.handleCallbackQuery(ctx, ctx.Bot(), query)
@@ -415,8 +423,15 @@ func (h *TelegramHandler) handlePrivateMessage(ctx context.Context, bot *telego.
 		// Создаем новый тикет
 		h.createNewTicket(ctx, bot, message, user, log)
 	} else {
-		// Добавляем сообщение к существующему тикету
-		h.addMessageToTicket(ctx, bot, message, activeTicket, log)
+		// Проверяем, не закрыт ли тикет
+		if activeTicket.Status == models.TicketStatusClosed || activeTicket.Status == models.TicketStatusRated {
+			// Если тикет закрыт, создаем новый
+			h.sendMessage(bot, message.Chat.ID, "💬 Ваше предыдущее обращение было закрыто. Создаем новое обращение...")
+			h.createNewTicket(ctx, bot, message, user, log)
+		} else {
+			// Добавляем сообщение к существующему тикету
+			h.addMessageToTicket(ctx, bot, message, activeTicket, log)
+		}
 	}
 }
 
@@ -466,6 +481,9 @@ func (h *TelegramHandler) createNewTicket(ctx context.Context, bot *telego.Bot, 
 		if err != nil {
 			log.WithError(err).Error("Failed to set channel message ID")
 		}
+
+		// Отправляем инструкцию в комментарии (группу обсуждения)
+		h.sendInstructionComment(ctx, bot, channelMessage.MessageID, log)
 	}
 
 	// Подтверждение пользователю
@@ -495,7 +513,7 @@ func (h *TelegramHandler) addMessageToTicket(ctx context.Context, bot *telego.Bo
 		FromUserID:  message.From.ID,
 		FromSupport: false,
 		Text:        message.Text,
-		MessageType: "text",
+		MessageType: h.getMessageType(message),
 	}
 
 	err := h.services.Ticket.AddMessage(ctx, ticket.ID, msgReq)
@@ -505,16 +523,41 @@ func (h *TelegramHandler) addMessageToTicket(ctx context.Context, bot *telego.Bo
 		return
 	}
 
-	// Пересылаем сообщение в группу поддержки
-	if ticket.ThreadID != 0 {
+	// Пересылаем сообщение пользователя в группу обсуждения как ответ на тему тикета
+	if ticket.ChannelMessageID != 0 && h.config.Bot.GroupID != 0 {
+		// Копируем сообщение пользователя в группу обсуждения
 		_, err = bot.CopyMessage(ctx, &telego.CopyMessageParams{
-			ChatID:          telegoutil.ID(h.config.Bot.GroupID),
-			FromChatID:      telegoutil.ID(message.Chat.ID),
-			MessageID:       message.MessageID,
-			ReplyParameters: &telego.ReplyParameters{MessageID: ticket.ThreadID},
+			ChatID:     telegoutil.ID(h.config.Bot.GroupID),
+			FromChatID: telegoutil.ID(message.Chat.ID),
+			MessageID:  message.MessageID,
+			ReplyParameters: &telego.ReplyParameters{
+				MessageID: ticket.ChannelMessageID,
+			},
 		})
 		if err != nil {
-			log.WithError(err).Error("Failed to copy message to support group")
+			log.WithError(err).Error("Failed to copy user message to discussion group")
+
+			// Fallback: отправляем как текстовое сообщение с указанием автора
+			user, userErr := h.services.User.GetUser(ctx, message.From.ID)
+			if userErr == nil {
+				fallbackText := fmt.Sprintf(
+					"👤 <b>%s</b> добавил сообщение:\n\n%s",
+					user.GetDisplayName(),
+					message.Text,
+				)
+
+				_, err = bot.SendMessage(ctx, &telego.SendMessageParams{
+					ChatID:    telegoutil.ID(h.config.Bot.GroupID),
+					Text:      fallbackText,
+					ParseMode: "HTML",
+					ReplyParameters: &telego.ReplyParameters{
+						MessageID: ticket.ChannelMessageID,
+					},
+				})
+				if err != nil {
+					log.WithError(err).Error("Failed to send fallback message to discussion group")
+				}
+			}
 		}
 	}
 
@@ -582,6 +625,15 @@ func (h *TelegramHandler) isChannelForward(update telego.Update) bool {
 		update.Message.SenderChat.ID == h.config.Bot.ChannelID
 }
 
+func (h *TelegramHandler) isChannelComment(update telego.Update) bool {
+	return update.Message != nil &&
+		update.Message.Chat.ID == h.config.Bot.GroupID &&
+		update.Message.ReplyToMessage != nil &&
+		(update.Message.ReplyToMessage.SenderChat != nil &&
+			update.Message.ReplyToMessage.SenderChat.ID == h.config.Bot.ChannelID ||
+			update.Message.MessageThreadID != 0)
+}
+
 func (h *TelegramHandler) isGroupReply(update telego.Update) bool {
 	return update.Message != nil &&
 		update.Message.Chat.ID == h.config.Bot.GroupID &&
@@ -593,6 +645,51 @@ func (h *TelegramHandler) isGroupReply(update telego.Update) bool {
 // handleChannelPost обрабатывает посты из канала
 func (h *TelegramHandler) handleChannelPost(ctx context.Context, bot *telego.Bot, update telego.Update) {
 	// TODO: Implement channel post handling
+}
+
+// handleChannelComments обрабатывает комментарии в канале
+// Примечание: для работы комментариев канал должен иметь связанную группу обсуждения (Discussion Group)
+// Комментарии приходят в эту группу как reply на переадресованные сообщения из канала
+func (h *TelegramHandler) handleChannelComments(ctx context.Context, bot *telego.Bot, update telego.Update) {
+	message := update.Message
+
+	log := h.logger.WithFields(map[string]interface{}{
+		"user_id":      message.From.ID,
+		"username":     message.From.Username,
+		"channel_id":   message.Chat.ID,
+		"reply_to_msg": message.ReplyToMessage.MessageID,
+	})
+
+	// Находим тикет по ID сообщения в канале или Thread ID
+	var searchMessageID int
+	if message.MessageThreadID != 0 {
+		// Это сообщение в теме - используем Thread ID
+		searchMessageID = message.MessageThreadID
+	} else {
+		// Это ответ на сообщение из канала
+		searchMessageID = message.ReplyToMessage.MessageID
+	}
+
+	ticket, err := h.services.Ticket.GetTicketByChannelMessage(ctx, searchMessageID)
+	if err != nil {
+		log.WithError(err).Error("Failed to find ticket by channel message")
+		return
+	}
+
+	if ticket == nil {
+		log.Warn("No ticket found for channel message")
+		return
+	}
+
+	// Это ответ техподдержки - пересылаем пользователю или выполняем команду
+	if message.From.ID != ticket.UserID {
+		// Проверяем, является ли сообщение командой
+		if h.handleTicketCommand(ctx, bot, message, ticket, log) {
+			return
+		}
+		// Обычный ответ - пересылаем пользователю
+		h.forwardSupportReplyToUser(ctx, bot, message, ticket, log)
+	}
 }
 
 // handleGroupReply обрабатывает ответы в группе
@@ -657,6 +754,8 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, bot *telego.B
 		h.handleRefreshStatus(ctx, bot, query, log)
 	case strings.HasPrefix(query.Data, "rate_"):
 		h.handleRating(ctx, bot, query, log)
+	case strings.HasPrefix(query.Data, "reopen:"):
+		h.handleReopenTicket(ctx, bot, query, log)
 	default:
 		h.answerCallbackQuery(bot, query.ID, "❓ Неизвестное действие")
 	}
@@ -943,4 +1042,339 @@ func (h *TelegramHandler) handleUnbanCommand(ctx context.Context, bot *telego.Bo
 	}
 
 	h.sendMessage(bot, message.Chat.ID, fmt.Sprintf("✅ Пользователь %d разблокирован", userID))
+}
+
+// forwardSupportReplyToUser пересылает ответ техподдержки пользователю
+func (h *TelegramHandler) forwardSupportReplyToUser(ctx context.Context, bot *telego.Bot, message *telego.Message, ticket *models.Ticket, log logger.Logger) {
+	// Добавляем сообщение к тикету
+	msgReq := &models.AddMessageRequest{
+		MessageID:   message.MessageID,
+		FromUserID:  message.From.ID,
+		FromSupport: true,
+		Text:        message.Text,
+		MessageType: h.getMessageType(message),
+	}
+
+	err := h.services.Ticket.AddMessage(ctx, ticket.ID, msgReq)
+	if err != nil {
+		log.WithError(err).Error("Failed to add support message to ticket")
+		return
+	}
+
+	// Формируем имя сотрудника техподдержки
+	var supportName string
+	if message.From.FirstName != "" {
+		supportName = message.From.FirstName
+		if message.From.LastName != "" {
+			supportName += " " + message.From.LastName
+		}
+	} else if message.From.Username != "" {
+		supportName = "@" + message.From.Username
+	} else {
+		supportName = "Техподдержка"
+	}
+
+	// Отправляем заголовок с информацией о том, кто ответил
+	headerText := fmt.Sprintf("💬 <b>%s</b> ответил по обращению #%s:", supportName, ticket.TicketNumber)
+	_, err = bot.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID:    telegoutil.ID(ticket.UserID),
+		Text:      headerText,
+		ParseMode: "HTML",
+	})
+	if err != nil {
+		log.WithError(err).Error("Failed to send support reply header to user")
+	}
+
+	// Копируем оригинальное сообщение техподдержки пользователю
+	_, err = bot.CopyMessage(ctx, &telego.CopyMessageParams{
+		ChatID:     telegoutil.ID(ticket.UserID),
+		FromChatID: telegoutil.ID(message.Chat.ID),
+		MessageID:  message.MessageID,
+	})
+	if err != nil {
+		log.WithError(err).Error("Failed to copy support message to user")
+
+		// Fallback: отправляем только текст, если копирование не удалось
+		if message.Text != "" {
+			fallbackText := fmt.Sprintf("📝 %s", message.Text)
+			_, err = bot.SendMessage(ctx, &telego.SendMessageParams{
+				ChatID:    telegoutil.ID(ticket.UserID),
+				Text:      fallbackText,
+				ParseMode: "HTML",
+			})
+			if err != nil {
+				log.WithError(err).Error("Failed to send fallback support message to user")
+			}
+		}
+	}
+
+	// Обновляем статус тикета на "в работе"
+	err = h.services.Ticket.ChangeTicketStatus(ctx, ticket.ID, models.TicketStatusInProgress)
+	if err != nil {
+		log.WithError(err).Error("Failed to update ticket status")
+	}
+
+	log.Info("Support reply forwarded to user")
+}
+
+// handleTicketCommand обрабатывает команды управления тикетом в комментариях
+func (h *TelegramHandler) handleTicketCommand(ctx context.Context, bot *telego.Bot, message *telego.Message, ticket *models.Ticket, log logger.Logger) bool {
+	text := strings.TrimSpace(message.Text)
+
+	switch {
+	case text == "/resolve" || text == "/solved":
+		return h.handleResolveTicket(ctx, bot, message, ticket, log)
+	case text == "/close":
+		return h.handleCloseTicketFromChannel(ctx, bot, message, ticket, log)
+	case strings.HasPrefix(text, "/priority"):
+		return h.handleChangePriority(ctx, bot, message, ticket, log)
+	case strings.HasPrefix(text, "/assign"):
+		return h.handleAssignFromChannel(ctx, bot, message, ticket, log)
+	default:
+		return false // Не команда
+	}
+}
+
+// handleResolveTicket помечает тикет как решенный
+func (h *TelegramHandler) handleResolveTicket(ctx context.Context, bot *telego.Bot, message *telego.Message, ticket *models.Ticket, log logger.Logger) bool {
+	// Обновляем статус на "решен"
+	err := h.services.Ticket.ChangeTicketStatus(ctx, ticket.ID, models.TicketStatusClosed)
+	if err != nil {
+		log.WithError(err).Error("Failed to resolve ticket")
+		return true
+	}
+
+	// Уведомляем пользователя
+	userMessage := fmt.Sprintf(
+		"✅ <b>Ваше обращение #%s помечено как решенное</b>\n\n"+
+			"Если проблема решена, нажмите «Закрыть обращение».\n"+
+			"Если нужна дополнительная помощь, просто отправьте сообщение.",
+		ticket.TicketNumber,
+	)
+
+	keyboard := &telego.InlineKeyboardMarkup{
+		InlineKeyboard: [][]telego.InlineKeyboardButton{
+			{
+				{Text: "✅ Закрыть обращение", CallbackData: fmt.Sprintf("confirm_close:%s", ticket.ID.Hex())},
+				{Text: "🔄 Возобновить", CallbackData: fmt.Sprintf("reopen:%s", ticket.ID.Hex())},
+			},
+		},
+	}
+
+	_, err = bot.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID:      telegoutil.ID(ticket.UserID),
+		Text:        userMessage,
+		ParseMode:   "HTML",
+		ReplyMarkup: keyboard,
+	})
+	if err != nil {
+		log.WithError(err).Error("Failed to send resolution notification to user")
+	}
+
+	// Отвечаем в группе обсуждения
+	_, err = bot.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID: telegoutil.ID(message.Chat.ID),
+		Text:   "✅ Тикет помечен как решенный. Пользователь уведомлен.",
+		ReplyParameters: &telego.ReplyParameters{
+			MessageID: message.MessageID,
+		},
+	})
+	if err != nil {
+		log.WithError(err).Error("Failed to send resolution confirmation")
+	}
+
+	return true
+}
+
+// handleCloseTicketFromChannel закрывает тикет из канала
+func (h *TelegramHandler) handleCloseTicketFromChannel(ctx context.Context, bot *telego.Bot, message *telego.Message, ticket *models.Ticket, log logger.Logger) bool {
+	err := h.services.Ticket.CloseTicket(ctx, ticket.ID, message.From.ID)
+	if err != nil {
+		log.WithError(err).Error("Failed to close ticket from channel")
+		return true
+	}
+
+	// Записываем метрику
+	metrics.RecordTicketClosed("closed", "admin")
+
+	// Уведомляем пользователя
+	userMessage := fmt.Sprintf(
+		"✅ <b>Ваше обращение #%s закрыто</b>\n\n"+
+			"Спасибо за обращение! Если у вас возникнут новые вопросы, "+
+			"просто отправьте сообщение боту.",
+		ticket.TicketNumber,
+	)
+
+	_, err = bot.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID:    telegoutil.ID(ticket.UserID),
+		Text:      userMessage,
+		ParseMode: "HTML",
+	})
+	if err != nil {
+		log.WithError(err).Error("Failed to send closure notification to user")
+	}
+
+	return true
+}
+
+// handleChangePriority изменяет приоритет тикета
+func (h *TelegramHandler) handleChangePriority(ctx context.Context, bot *telego.Bot, message *telego.Message, ticket *models.Ticket, log logger.Logger) bool {
+	parts := strings.Fields(message.Text)
+	if len(parts) < 2 {
+		return true
+	}
+
+	var priority models.TicketPriority
+	switch strings.ToLower(parts[1]) {
+	case "low", "низкий":
+		priority = models.PriorityLow
+	case "normal", "обычный":
+		priority = models.PriorityNormal
+	case "high", "высокий":
+		priority = models.PriorityHigh
+	case "critical", "критический":
+		priority = models.PriorityCritical
+	default:
+		return true
+	}
+
+	updateReq := &models.UpdateTicketRequest{
+		Priority: &priority,
+	}
+
+	err := h.services.Ticket.UpdateTicket(ctx, ticket.ID, updateReq)
+	if err != nil {
+		log.WithError(err).Error("Failed to update ticket priority")
+		return true
+	}
+
+	_, err = bot.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID: telegoutil.ID(message.Chat.ID),
+		Text:   fmt.Sprintf("✅ Приоритет тикета изменен на: %s", priority),
+		ReplyParameters: &telego.ReplyParameters{
+			MessageID: message.MessageID,
+		},
+	})
+	if err != nil {
+		log.WithError(err).Error("Failed to send priority change confirmation")
+	}
+
+	return true
+}
+
+// handleAssignFromChannel назначает тикет из канала
+func (h *TelegramHandler) handleAssignFromChannel(ctx context.Context, bot *telego.Bot, message *telego.Message, ticket *models.Ticket, log logger.Logger) bool {
+	assignedTo := message.From.ID
+
+	err := h.services.Ticket.AssignTicket(ctx, ticket.ID, assignedTo)
+	if err != nil {
+		log.WithError(err).Error("Failed to assign ticket from channel")
+		return true
+	}
+
+	_, err = bot.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID: telegoutil.ID(message.Chat.ID),
+		Text:   fmt.Sprintf("✅ Тикет назначен на %s", message.From.FirstName),
+		ReplyParameters: &telego.ReplyParameters{
+			MessageID: message.MessageID,
+		},
+	})
+	if err != nil {
+		log.WithError(err).Error("Failed to send assignment confirmation")
+	}
+
+	return true
+}
+
+// handleReopenTicket возобновляет закрытый тикет
+func (h *TelegramHandler) handleReopenTicket(ctx context.Context, bot *telego.Bot, query telego.CallbackQuery, log logger.Logger) {
+	ticketIDStr := strings.TrimPrefix(query.Data, "reopen:")
+	ticketID, err := h.parseObjectID(ticketIDStr)
+	if err != nil {
+		log.WithError(err).Error("Invalid ticket ID for reopen")
+		h.answerCallbackQuery(bot, query.ID, "❌ Неверный ID обращения")
+		return
+	}
+
+	// Меняем статус на "открыт"
+	err = h.services.Ticket.ChangeTicketStatus(ctx, ticketID, models.TicketStatusOpen)
+	if err != nil {
+		log.WithError(err).Error("Failed to reopen ticket")
+		h.answerCallbackQuery(bot, query.ID, "❌ Ошибка при возобновлении обращения")
+		return
+	}
+
+	// Обновляем сообщение
+	_, err = bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+		ChatID:    telegoutil.ID(query.Message.GetChat().ID),
+		MessageID: query.Message.GetMessageID(),
+		Text:      "🔄 <b>Обращение возобновлено</b>\n\nВы можете продолжить отправлять сообщения по этому обращению.",
+		ParseMode: "HTML",
+	})
+	if err != nil {
+		log.WithError(err).Error("Failed to edit reopen message")
+	}
+
+	h.answerCallbackQuery(bot, query.ID, "🔄 Обращение возобновлено")
+
+	log.Info("Ticket reopened by user")
+}
+
+// sendInstructionComment отправляет инструкцию в комментарии к новому тикету
+func (h *TelegramHandler) sendInstructionComment(ctx context.Context, bot *telego.Bot, channelMessageID int, log logger.Logger) {
+	instructionText := "💬 <b>Инструкция для техподдержки:</b>\n\n" +
+		"🔹 Для ответа пользователю используйте функцию <b>'Ответить ⤺'</b> на любое сообщение в этой теме\n" +
+		"🔹 Команды управления тикетом:\n" +
+		"   • <code>/resolve</code> - пометить как решенный\n" +
+		"   • <code>/close</code> - закрыть принудительно\n" +
+		"   • <code>/priority [low|normal|high|critical]</code> - изменить приоритет\n" +
+		"   • <code>/assign</code> - назначить на себя"
+
+	_, err := bot.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID:              telegoutil.ID(h.config.Bot.GroupID),
+		Text:                instructionText,
+		ParseMode:           "HTML",
+		DisableNotification: true,
+		ReplyParameters: &telego.ReplyParameters{
+			MessageID: channelMessageID,
+		},
+	})
+	if err != nil {
+		log.WithError(err).Error("Failed to send instruction comment")
+	}
+}
+
+// getMessageType определяет тип сообщения
+func (h *TelegramHandler) getMessageType(message *telego.Message) string {
+	if message.Photo != nil {
+		return "photo"
+	}
+	if message.Document != nil {
+		return "document"
+	}
+	if message.Video != nil {
+		return "video"
+	}
+	if message.Audio != nil {
+		return "audio"
+	}
+	if message.Voice != nil {
+		return "voice"
+	}
+	if message.VideoNote != nil {
+		return "video_note"
+	}
+	if message.Sticker != nil {
+		return "sticker"
+	}
+	if message.Animation != nil {
+		return "animation"
+	}
+	if message.Location != nil {
+		return "location"
+	}
+	if message.Contact != nil {
+		return "contact"
+	}
+	return "text"
 }

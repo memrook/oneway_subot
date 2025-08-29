@@ -3,11 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/memrook/oneway_subot/internal/models"
 	"github.com/memrook/oneway_subot/internal/repository"
 	"github.com/memrook/oneway_subot/pkg/logger"
-	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // userService реализация UserService
@@ -177,7 +177,7 @@ func (s *userService) IsUserBlocked(ctx context.Context, userID int64) (bool, er
 	if err != nil {
 		// Если пользователь не найден, считаем что он не заблокирован
 		// Это позволит создать нового пользователя при первом обращении
-		if mongo.IsDuplicateKeyError(err) {
+		if strings.Contains(err.Error(), "not found") {
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to check user status: %w", err)

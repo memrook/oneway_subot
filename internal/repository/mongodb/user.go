@@ -187,10 +187,10 @@ func (r *userRepository) List(ctx context.Context, limit, offset int) ([]*models
 func (r *userRepository) GetStats(ctx context.Context, userID int64) (*models.UserStats, error) {
 	pipeline := mongo.Pipeline{
 		{
-			{"$match", bson.M{"user_id": userID}},
+			{Key: "$match", Value: bson.M{"user_id": userID}},
 		},
 		{
-			{"$lookup", bson.M{
+			{Key: "$lookup", Value: bson.M{
 				"from":         "tickets",
 				"localField":   "user_id",
 				"foreignField": "user_id",
@@ -198,7 +198,7 @@ func (r *userRepository) GetStats(ctx context.Context, userID int64) (*models.Us
 			}},
 		},
 		{
-			{"$addFields", bson.M{
+			{Key: "$addFields", Value: bson.M{
 				"total_tickets": bson.M{"$size": "$tickets"},
 				"open_tickets": bson.M{"$size": bson.M{"$filter": bson.M{
 					"input": "$tickets",
@@ -224,7 +224,7 @@ func (r *userRepository) GetStats(ctx context.Context, userID int64) (*models.Us
 			}},
 		},
 		{
-			{"$project", bson.M{
+			{Key: "$project", Value: bson.M{
 				"user_id":           "$user_id",
 				"total_tickets":     1,
 				"open_tickets":      1,
@@ -297,7 +297,7 @@ func (r *userRepository) Unblock(ctx context.Context, userID int64) error {
 func (r *userRepository) GetActiveUsers(ctx context.Context, since time.Time) ([]*models.User, error) {
 	pipeline := mongo.Pipeline{
 		{
-			{"$lookup", bson.M{
+			{Key: "$lookup", Value: bson.M{
 				"from":         "tickets",
 				"localField":   "user_id",
 				"foreignField": "user_id",
@@ -305,7 +305,7 @@ func (r *userRepository) GetActiveUsers(ctx context.Context, since time.Time) ([
 			}},
 		},
 		{
-			{"$match", bson.M{
+			{Key: "$match", Value: bson.M{
 				"$or": []bson.M{
 					{"updated_at": bson.M{"$gte": since}},
 					{"tickets.updated_at": bson.M{"$gte": since}},
@@ -314,7 +314,7 @@ func (r *userRepository) GetActiveUsers(ctx context.Context, since time.Time) ([
 			}},
 		},
 		{
-			{"$project", bson.M{
+			{Key: "$project", Value: bson.M{
 				"user_id":       1,
 				"first_name":    1,
 				"last_name":     1,
@@ -328,7 +328,7 @@ func (r *userRepository) GetActiveUsers(ctx context.Context, since time.Time) ([
 			}},
 		},
 		{
-			{"$sort", bson.M{"updated_at": -1}},
+			{Key: "$sort", Value: bson.M{"updated_at": -1}},
 		},
 	}
 
